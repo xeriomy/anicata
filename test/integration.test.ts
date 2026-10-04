@@ -134,9 +134,14 @@ describe('GET /meta/:type/:id.json', () => {
 
 describe('never returns a non-200', () => {
   it('answers 200 with an empty list when the catalog service throws', async () => {
+    // BOTH services are stubbed to throw. Injecting only a broken catalogService
+    // leaves /meta/* on the real MetaService, which attempts a live AniList call:
+    // the suite's stated invariant is that `npm test` never touches the network,
+    // and a network-dependent test can fail for reasons unrelated to our code.
     const broken = createApp({
       catalogService: { getCatalogPage: async () => { throw new Error('boom'); },
                         search: async () => { throw new Error('boom'); } } as never,
+      metaService: { getByAnilistId: async () => { throw new Error('boom'); } } as never,
     });
     for (const path of ['/catalog/anime/anime-trending.json',
                         '/catalog/anime/anime-search/search=x.json',
