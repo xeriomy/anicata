@@ -60,6 +60,11 @@ These apply to every task. Values are copied verbatim from the spec.
   (`status: 404`, message `"Not Found."`) **and** `data.Media: null` — verified live.
   Discriminate on `data.Media`, never on `errors` alone: a malformed query instead returns
   `data: null` with `status: 400` and no `Media` key.
+- **Every GraphQL response is wrapped in a `data` envelope.** A catalogue query returns
+  `{"data":{"Page":{"pageInfo":…,"media":[…]}}}`; `Media(id:)` returns
+  `{"data":{"Media":…}}`. **Fixtures must preserve this envelope** — a fixture trimmed
+  to the bare inner object makes an adapter that ignores `data` pass every test and
+  return nothing in production.
 - Rate limit is **30 req/min** (`x-ratelimit-limit: 30`). Client limiter defaults to 25/min.
 
 **Nuvio (all verified from client source)**
@@ -364,7 +369,10 @@ catalogue page. If none exists in the first page, skip it and note that
 Review Focus #5 is covered by a synthetic fixture in Task 6 instead.
 
 Trim each fixture to a small size (5–10 media entries) with `json.dumps`, keeping
-full fidelity of every field. Do not hand-edit field values.
+full fidelity of every field. **Keep the top-level `data` envelope exactly as AniList
+returned it** — trim the entries *inside* `data.Page.media`, never the envelope
+itself. A fixture trimmed to the bare inner object makes an adapter that ignores
+`data` pass every test and return nothing in production. Do not hand-edit field values.
 
 - [ ] **Step 2: Write `src/sources/anilist/queries.ts`**
 
@@ -1196,8 +1204,22 @@ describe('AniListSource.fetchCatalogPage', () => {
       .rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 42 });
   });
 
-  it('throws kind=not_found when AniList returns data.media === null', async () => {
-    await expect(new AniListSource(deps([{ pageInfo: {}, media: null }]))
+  it('unwraps the data envelope, because the live API returns {"data":{"Page":…}}', async () => {
+    // A bare-PagePayload adapter passes every other test here and returns nothing
+    // in production. This test is the guard.
+    const d = deps([{ data: { Page: load('./fixtures/catalog-trending.json') } }]);
+    const r = await new AniListSource(d).fetchCatalogPage({ sort: ['TRENDING_DESC'], page: 1, perPage: 50 });
+    expect(r.items.length).toBeGreaterThan(0);
+    expect(r.items[0]!.identity.anilist).toBeTypeOf('number');
+  });
+
+  it('throws kind=not_found when AniList returns a null Page', async () => {
+    await expect(new AniListSource(deps([{ data: { Page: null } }]))
+      .fetchCatalogPage({ sort: [], page: 1, perPage: 50 })).rejects.toMatchObject({ kind: 'not_found' });
+  });
+
+  it('throws kind=not_found when the Page carries a null media list', async () => {
+    await expect(new AniListSource(deps([{ data: { Page: { pageInfo: {}, media: null } } }]))
       .fetchCatalogPage({ sort: [], page: 1, perPage: 50 })).rejects.toMatchObject({ kind: 'not_found' });
   });
 
@@ -1316,8 +1338,15 @@ Sorts: `anime-trending` → `['TRENDING_DESC']`; `anime-top-rated` → `['SCORE_
 - `limiter.tryAcquire()` false → `throw new SourceError('rate_limited', 'anilist limiter empty')`.
 - Body: `JSON.stringify({ query, variables })`, `Content-Type: application/json`.
 - `pageInfo.perPage` from the response, not the request (it may be clamped).
-- `search` and `fetchCatalogPage`: `data.media === null` → `SourceError('not_found')`.
-  This is deliberate — an exhausted/filtered page is not a transient failure.
+- **Unwrap the `data` envelope for catalogue queries too**, exactly as `fetchById`
+  already does for `Media`. Type the response as
+  `AniListGraphQLResponse<{ Page: AniListPage<AniListMedia> | null }>` and read
+  `body.data?.Page` — do **not** type the response as a bare `PagePayload`. AniList
+  returns `{"data":{"Page":{…}}}`, so a bare-typed adapter finds `undefined` against
+  the live API while passing every fixture-based test.
+- `search` and `fetchCatalogPage`: `body.data?.Page == null` **or**
+  `page.media === null` → `SourceError('not_found')`. This is deliberate — an
+  exhausted or filtered page is not a transient failure.
 - **Discriminate on `data.Media` before ever consulting `errors[]`.** AniList
   answers an unknown id with **both** `errors[{status:404}]` **and**
   `data.Media: null`, so a naive "errors present → throw" rule turns a not-found
