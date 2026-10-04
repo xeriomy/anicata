@@ -56,7 +56,10 @@ These apply to every task. Values are copied verbatim from the spec.
 - Use `coverImage.extraLarge` for posters. `coverImage.large` is a medium-sized URL and `medium` is small; the names lie. `color` is a hex string.
 - `duration` is an `Int` in minutes. `averageScore` is an `Int` 0–100. `nextAiringEpisode` may be `null`.
 - `Page.media` `pageInfo.total` is capped at 5000 — never treat it as the true total.
-- `Media(id:)` for a nonexistent id returns `{"data":{"Media":null}}` with HTTP 200 — not an error.
+- `Media(id:)` for a nonexistent id returns HTTP 200 with **both** an `errors` array
+  (`status: 404`, message `"Not Found."`) **and** `data.Media: null` — verified live.
+  Discriminate on `data.Media`, never on `errors` alone: a malformed query instead returns
+  `data: null` with `status: 400` and no `Media` key.
 - Rate limit is **30 req/min** (`x-ratelimit-limit: 30`). Client limiter defaults to 25/min.
 
 **Nuvio (all verified from client source)**
@@ -109,7 +112,7 @@ anicata/
 │   │   ├── catalog-trending.json    recorded AniList Page response (Task 2)
 │   │   ├── catalog-search.json      recorded AniList search response (Task 2)
 │   │   ├── meta-21.json             recorded AniList Media(id:21) response (Task 2)
-│   │   └── meta-null.json          recorded `{"data":{"Media":null}}` (Task 2)
+│   │   └── meta-null.json          recorded 404 errors[] + Media:null (Task 2)
 │   ├── helpers/serve.ts            boot the HTTP server on an ephemeral port
 │   ├── manifest.test.ts
 │   ├── cache.test.ts
@@ -347,8 +350,12 @@ append as `catalog-trending-p2.json` (needed to prove `skip=100` differs).
 Post `SEARCH_QUERY` with `{"search":"cowboy bebop","perPage":50,"page":1,"sort":["SEARCH_MATCH"]}` →
 `test/fixtures/catalog-search.json`.
 Post `META` with `{"id":21}` → `test/fixtures/meta-21.json` (One Piece).
-Post `META` with `{"id":99999999}` → `test/fixtures/meta-null.json` — must be
-literally `{"data":{"Media":null}}`. Verify this before committing; it is the
+Post `META` with `{"id":99999999}` → `test/fixtures/meta-null.json`.
+**Verified live shape** (this is what AniList actually returns — keep the real bytes):
+```json
+{"errors":[{"message":"Not Found.","status":404,"locations":[{"line":1,"column":16}]}],"data":{"Media":null}}
+```
+It carries BOTH an `errors` array and `data.Media: null`. That combination is the
 fixture that pins Review Focus #2.
 
 Also record one **live edge case** for later: an id whose `title.english`,
@@ -399,9 +406,14 @@ describe('recorded AniList fixtures', () => {
     expect(data.Media!.tags![0]!.category).toBeTypeOf('string'); // String, not object
   });
 
-  it('unknown id fixture is data.Media === null with no errors', () => {
-    const res = load<{ data?: { Media: AniListMedia | null } }>('./fixtures/meta-null.json');
+  it('unknown id fixture carries BOTH a 404 errors array and Media: null', () => {
+    const res = load<{
+      data?: { Media: AniListMedia | null };
+      errors?: Array<{ message: string; status: number }>;
+    }>('./fixtures/meta-null.json');
     expect(res.data?.Media).toBeNull();
+    // AniList reports "not found" as BOTH an error entry and a null Media.
+    expect(res.errors?.[0]?.status).toBe(404);
   });
 });
 ```
@@ -1206,6 +1218,12 @@ describe('AniListSource.fetchById', () => {
     expect(await new AniListSource(d).fetchById(99999999)).toBeNull();
   });
 
+  it('still returns null when a 404 errors array accompanies Media: null', async () => {
+    // The real AniList shape. An "errors present -> throw" rule would fail here.
+    const d = deps([{ errors: [{ message: 'Not Found.', status: 404 }], data: { Media: null } }]);
+    await expect(new AniListSource(d).fetchById(99999999)).resolves.toBeNull();
+  });
+
   it('preserves that null-media behaviour across the HttpClient boundary', async () => {
     // AniList answers HTTP 200 for an unknown id; the adapter must still yield null.
     const d = deps([{ data: { Media: null } }]);
@@ -1280,8 +1298,16 @@ Sorts: `anime-trending` → `['TRENDING_DESC']`; `anime-top-rated` → `['SCORE_
 - `pageInfo.perPage` from the response, not the request (it may be clamped).
 - `search` and `fetchCatalogPage`: `data.media === null` → `SourceError('not_found')`.
   This is deliberate — an exhausted/filtered page is not a transient failure.
-- Presence of `errors[]` → `SourceError('invalid_request', errors[0].message, errors[0].status)`.
-  A 429-shaped GraphQL error maps to `'rate_limited'`.
+- **Discriminate on `data.Media` before ever consulting `errors[]`.** AniList
+  answers an unknown id with **both** `errors[{status:404}]` **and**
+  `data.Media: null`, so a naive "errors present → throw" rule turns a not-found
+  into an exception and breaks the `fetchById` contract below. Order:
+  1. `data?.Media == null` on a `fetchById` → return `null` (**not** an error),
+     regardless of any `errors[]` alongside it.
+  2. Otherwise, if `errors[]` is non-empty → `SourceError('invalid_request',
+     errors[0].message, errors[0].status)`. A malformed query lands here because
+     it returns `data: null` with `status: 400` and no `Media` key.
+  3. A 429-shaped GraphQL error maps to `'rate_limited'`.
 - `fetchById`: `data.Media === null` → return `null` (**not** an error). This is
   the fixture-pinned Review Focus #2 case.
 - `fetchByIds`: post `Media(id_in: …)` in chunks of 50 (verified supported) and
