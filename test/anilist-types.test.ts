@@ -6,12 +6,17 @@ const load = <T>(p: string): T => JSON.parse(readFileSync(new URL(p, import.meta
 
 describe('recorded AniList fixtures', () => {
   it('catalog fixture parses and has the verified shape', () => {
-    const page = load<AniListGraphQLResponse<{ Page: AniListPage<AniListMedia> }>>(
+    const body = load<AniListGraphQLResponse<{ Page: AniListPage<AniListMedia> }>>(
       './fixtures/catalog-trending.json',
-    ).data?.Page!;
-    expect(page.pageInfo.perPage).toBeLessThanOrEqual(50); // clamp verified
-    expect(page.media.length).toBeGreaterThan(0);
-    const m = page.media[0]!;
+    );
+    // The fixture is a real capture: it keeps the GraphQL data envelope, which is what
+    // the adapter unwraps. Assert the envelope rather than asserting past it.
+    expect(body.data).toBeDefined();
+    const page = body.data?.Page;
+    expect(page).toBeDefined();
+    expect(page!.pageInfo.perPage).toBeLessThanOrEqual(50); // clamp verified
+    expect(page!.media.length).toBeGreaterThan(0);
+    const m = page!.media[0]!;
     expect(m.id).toBeTypeOf('number');
     expect(m.title.romaji ?? m.title.english ?? m.title.native).toBeTruthy();
     expect(typeof m.duration === 'number' || m.duration === null).toBe(true);
