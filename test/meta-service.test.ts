@@ -65,4 +65,29 @@ describe('MetaService.getByAnilistId', () => {
     expect(r.anime).toBeNull();
     expect(r.cacheMaxAge).toBeLessThanOrEqual(10);
   });
+
+  it('caches a missing title for only 60 seconds, not the 7-day metadata TTL', async () => {
+    // A title AniList lacks today may exist tomorrow. If the negative cache used
+    // META_TTL_MS, a newly-added title would be invisible for 7 days with no error.
+    let now = 0;
+    const cache = new TTLCache({ now: () => now });
+    const source = { fetchById: vi.fn().mockResolvedValueOnce(null).mockResolvedValue(onePiece) };
+    const s = new MetaService({ source, cache });
+
+    const first = await s.getByAnilistId(777);
+    expect(first.anime).toBeNull();
+    expect(source.fetchById).toHaveBeenCalledTimes(1);
+
+    // The miss is briefly cached (not served as a hit, but present with a short TTL).
+    expect(cache.get('meta:anilist:777')).toBeDefined();
+
+    now += 61_000; // past the 60s negative window, far inside META_TTL_MS
+
+    // The negative entry must have expired: with a 7-day TTL it would still be here.
+    expect(cache.get('meta:anilist:777')).toBeUndefined();
+
+    const second = await s.getByAnilistId(777);
+    expect(source.fetchById).toHaveBeenCalledTimes(2);
+    expect(second.anime).not.toBeNull();
+  });
 });
