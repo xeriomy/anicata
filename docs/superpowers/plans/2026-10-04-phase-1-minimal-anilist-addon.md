@@ -14,7 +14,7 @@ is a TTL + stale-while-revalidate + single-flight store; `net/` owns fetch,
 timeouts and the rate limiter. No framework, no database.
 
 **Tech Stack:** TypeScript 5 · Node.js 22 · `stremio-addon-sdk` 1.6.10 ·
-Vitest 3 · ESLint 9 (flat config) · Prettier 3 · `undici` (Node 22 native `fetch`)
+Vitest 3 · ESLint 9 (flat config) · Prettier 3 · Node 22 native `fetch` (no HTTP client dep)
 
 **Spec:** [`docs/architecture.md`](../../architecture.md) ·
 [`docs/nuvio-compatibility.md`](../../nuvio-compatibility.md) ·
@@ -52,7 +52,7 @@ These apply to every task. Values are copied verbatim from the spec.
 - `perPage` is **silently clamped to 50**. One Nuvio page of 100 = **2** AniList requests.
 - Only one search argument exists: `search`. There is no `search_as_broad`, no `searchByAlias`.
 - `MediaTag.category` is a **String**. `MediaTag` has `isMediaSpoiler`, **not** `isSpoiler`; `isMediaRelevant` does not exist.
-- `studies.edges` are `StudioEdge` → field is `isMain`. Only `relations.edges` uses `MediaEdge`.
+- `studios.edges` are `StudioEdge` → field is `isMain`. Only `relations.edges` uses `MediaEdge`.
 - Use `coverImage.extraLarge` for posters. `coverImage.large` is a medium-sized URL and `medium` is small; the names lie. `color` is a hex string.
 - `duration` is an `Int` in minutes. `averageScore` is an `Int` 0–100. `nextAiringEpisode` may be `null`.
 - `Page.media` `pageInfo.total` is capped at 5000 — never treat it as the true total.
@@ -81,11 +81,11 @@ These apply to every task. Values are copied verbatim from the spec.
 Five input classes or failure modes the spec implies that a naive implementation
 would get wrong. Each has a test pinned to the task that owns the code.
 
-1. **`skip` past the end, or a short upstream page.** A reasonable person expects pagination to stop cleanly. Naive code loops forever or returns duplicates, and Nuvio kills the row after 3 duplicate pages. → Task 7
-2. **AniList returning `{"data":{"Media":null}}` with HTTP 200** for an unknown id. Naive code checks `resp.ok` and treats this as success, rendering a meta with `name: null`. → Task 9
-3. **`pageInfo.total` capped at 5000.** Code that computes page count from `total / perPage` will offer ~100 pages for every catalogue and silently truncate. → Task 7
+1. **`skip` past the end, or a short upstream page.** A reasonable person expects pagination to stop cleanly. Naive code loops forever or returns duplicates, and Nuvio kills the row after 3 duplicate pages. → Task 8
+2. **AniList returning `{"data":{"Media":null}}` with HTTP 200** for an unknown id. Naive code checks `resp.ok` and treats this as success, rendering a meta with `name: null`. → Task 7 (adapter) and Task 9 (service)
+3. **`pageInfo.total` capped at 5000.** Code that computes page count from `total / perPage` will offer ~100 pages for every catalogue and silently truncate. → Task 8 (the service must never derive pages from `total`)
 4. **Concurrent identical requests to the same uncached key.** Without single-flight, a cold cache under Nuvio's parallel Home-row fetch issues N identical AniList requests and burns the 30/min budget instantly. → Task 4
-5. **Title with all three AniList titles null-ish / whitespace-only.** Naive `title.english ?? title.romaji` yields `undefined`, and Nuvio **silently drops** any item with a blank `name`. → Task 6
+5. **Title with all three AniList titles null-ish / whitespace-only.** Naive `title.english ?? title.romaji` yields `undefined`, and Nuvio **silently drops** any item with a blank `name`. → Task 5 (`resolveDisplayTitle`) and Task 6 (`normalizeMedia`)
 
 ---
 
@@ -96,13 +96,13 @@ anicata/
 ├── package.json                  npm scripts, deps
 ├── tsconfig.json                 strict, NodeNext
 ├── vitest.config.ts
-├── eslint.config.js              includes the layer boundary rules (Task 1)
+├── eslint.config.js              layer boundary rules added in Task 5
 ├── .prettierrc.json
 ├── .gitignore
 ├── .env.example
 ├── README.md
 ├── docs/                         (already written by the research phase)
-├── public/logo.png               1×1 transparent PNG placeholder (Task 1)
+├── public/logo.png               1×1 transparent PNG placeholder (Task 1), served by Task 15
 │
 ├── test/
 │   ├── fixtures/
@@ -265,7 +265,7 @@ they are what force explicit handling of AniList's many nullable fields.
 `vitest.config.ts` — `test: { environment: 'node', include: ['test/**/*.test.ts'] }`.
 
 `eslint.config.js` — flat config from `@eslint/js` + `typescript-eslint`
-recommended, plus the layer boundary rules from Task 2 onward (add them there).
+recommended. Layer boundary rules are added in Task 5, which owns the boundary.
 
 `.prettierrc.json` — `{ "singleQuote": true, "trailingComma": "all", "printWidth": 100 }`.
 
@@ -2378,6 +2378,16 @@ describe('GET /manifest.json', () => {
     const res = await supertest(app).get('/manifest.json');
     expect(res.headers['access-control-allow-origin']).toBe('*');
   });
+
+  it('serves the manifest logo at the path the manifest declares', async () => {
+    const manifest = await supertest(app).get('/manifest.json');
+    const logoPath = manifest.body.logo as string;
+    expect(logoPath).toBe('/logo.png');
+    const logo = await supertest(app).get(logoPath);
+    expect(logo.status).toBe(200);
+    expect(logo.headers['content-type']).toMatch(/^image\//);
+    expect(logo.body.length).toBeGreaterThan(0);
+  });
 });
 
 describe('GET /catalog/:type/:id.json', () => {
@@ -2492,6 +2502,21 @@ Expected: FAIL — `Cannot find module '../src/index.js'`
 `defineMetaHandler(createMetaHandler(...))` → `getRouter(builder)` mounted on a bare
 express app.
 
+**Mount `public/` as static assets**, otherwise the manifest's `logo: '/logo.png'`
+404s and Nuvio shows a broken image in the add-on list:
+
+```ts
+import express from 'express';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
+app.use('/', express.static(publicDir, { maxAge: '1d', fallthrough: true }));
+```
+
+Because `tsc` emits `dist/index.js` while `public/` stays at the repo root, resolve
+the directory relative to `import.meta.url` as shown — **not** `process.cwd()`.
+
 Read the version from `package.json` at build time via
 `createRequire(import.meta.url)('./package.json').version`, not `process.env.npm_package_version`.
 
@@ -2505,7 +2530,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `npx vitest run test/integration.test.ts` → Expected: 15 passed
+Run: `npx vitest run test/integration.test.ts` → Expected: 16 passed
 
 - [ ] **Step 6: Run the full suite, typecheck and lint**
 
@@ -2677,3 +2702,10 @@ emitting `kitsu:` ids (ADR-016).
 - **Proportion.** Function bodies are given only where the tests leave the
   algorithm open (cache `wrap`, LRU eviction, page stitching, extras coercion).
   Everything else is a signature plus pinned assertions.
+- **Pre-flight scan found and closed one load-bearing gap.** The manifest declares
+  `logo: '/logo.png'` and `public/logo.png` is created in Task 1, but no task
+  mounted `public/` as static assets — so the logo would have 404'd in Nuvio and
+  the Phase 1 exit gate "manifest logo renders in the add-on list" would have
+  failed on-device only, after every automated test was green. Task 15 now mounts
+  `express.static` and an integration test fetches the manifest, reads its
+  declared `logo` path, and asserts that path returns a 200 image.
