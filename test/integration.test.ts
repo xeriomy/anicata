@@ -147,4 +147,21 @@ describe('never returns a non-200', () => {
       expect(res.status, path).toBe(200);
     }
   });
+
+  it('answers 200 when the meta service throws', async () => {
+    // The meta path has the same no-5xx guarantee as the catalogue path: a
+    // malformed body makes Nuvio's MetaDetailsParser throw, which makes Nuvio
+    // silently skip this add-on and fall through to TMDB. Proved here rather than
+    // inferred, because the catalogue test above cannot reach it.
+    const broken = createApp({
+      metaService: { getByAnilistId: async () => { throw new Error('boom'); } } as never,
+    });
+    for (const path of ['/meta/anime/anilist%3A21.json', '/meta/anime/21.json',
+                        '/meta/anime/garbage.json']) {
+      const res = await supertest(broken).get(path);
+      expect(res.status, path).toBe(200);
+      expect(res.body.meta.id, path).toBeTruthy();
+      expect(res.body.meta.name, path).toBe('Unavailable');
+    }
+  });
 });

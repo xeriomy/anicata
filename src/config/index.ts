@@ -45,6 +45,27 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   };
 }
 
+/**
+ * NOT YET WIRED — do not advertise `titleLang` as a working option.
+ *
+ * Nuvio does preserve the manifest URL's query string and re-append it to every
+ * catalogue and meta request (verified in its `AddonTransportUrls.kt`: the built
+ * URL ends `return resourceUrl + query`). But `stremio-addon-sdk`'s router never
+ * reads `req.query` — it derives extras solely from the final path segment
+ * (`qs.parse(req.url.split('/').pop().slice(0, -5))`, `getRouter.js:55`). So the
+ * query string arrives at our server and is discarded before any handler sees it,
+ * and `AniListSource` always receives `titleLang: undefined` and falls back to
+ * `'english'`.
+ *
+ * Wiring it would mean threading the query string past the SDK's router, either by
+ * forking `getRouter` or by rewriting `req.url` in express middleware so the value
+ * lands in the extras segment. Both are non-trivial, and no Phase 1 exit gate
+ * requires them. Deferred to Phase 8 alongside a `/configure` page, where language
+ * becomes a real form field rather than a query parameter the protocol drops.
+ *
+ * This function is retained (and tested) because Phase 8 will need it; it is simply
+ * not part of the public contract yet.
+ */
 export function parseRequestConfig(query: string | URLSearchParams | undefined): RequestConfig {
   let raw: string | null = null;
   if (typeof query === 'string') {
