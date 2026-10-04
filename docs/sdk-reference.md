@@ -17,6 +17,7 @@
 | GitHub "latest release" | `v1.1.4`, 2019-03-14 — **stale metadata; npm is ahead** |
 | Runtime deps | `chalk@^2.4.2`, `cors@^2.8.4`, `express@^4.16.3`, `inquirer@^6.2.2`, `mkdirp@^0.5.1`, `node-fetch@^2.3.0`, `opn@^5.4.0`, `router@^1.3.3`, `stremio-addon-linter@^1.7.0` |
 | Dev deps | `eslint@^5`, `supertest@^3`, `tape@^4`, `typescript@^5.9.2`, `stremio-addon-client@1.16.1` |
+| **Published type declarations** | ⚠ **NONE — see §11a.** `package.json` has no `types`/`typings` field and the npm tarball contains no `.d.ts` |
 
 > **Verdict: maintained.** A merge landed 11 days before this research. The GitHub
 > Releases page is stale, which is misleading — do not conclude "unmaintained"
@@ -31,7 +32,7 @@
 
 | SDK API | Use? | Why |
 |---|---|---|
-| `addonBuilder` | ✅ | manifest + handler registration |
+| `addonBuilder` | ✅ | manifest + handler registration (a **class**; `define*Handler` return `void`, so not chainable) |
 | `defineCatalogHandler` | ✅ | catalog + search |
 | `defineMetaHandler` | ✅ | metadata |
 | `serveHTTP` | ✅ | hosting |
@@ -372,8 +373,39 @@ milliseconds").
 
 ## 8. TypeScript types
 
-The SDK ships its own `.d.ts` (`src/types.d.ts`, `src/builder.d.ts`,
-`src/getRouter.d.ts`, `src/serveHTTP.d.ts`) — **no `@types/*` package needed.**
+> ⚠ **Corrected 2026-10-04.** An earlier draft of this document stated the SDK "ships its
+> own `.d.ts` — no `@types/*` package needed". **That was wrong.** It is true of the
+> GitHub repository and false of the published npm package. See §11a.
+
+We depend on **`@types/stremio-addon-sdk@1.6.12`** as a devDependency. It provides
+`Manifest`, `ManifestCatalog`, `ManifestExtra`, `MetaPreview`, `MetaDetail`, `MetaVideo`,
+`MetaLink`, `Extra`, `ContentType`, `Cache`, `AddonCatalog`, `AddonInterface`, `Args`,
+`serveHTTP` and `getRouter`.
+
+**Two things it gets wrong about our use case** — both verified against the installed
+package:
+
+1. **`ContentType` omits `"anime"`.** It is `"movie" | "series" | "channel" | "tv"`. Nuvio
+   *requires* `"anime"`: it labels the type and classifies `anilist:`-prefixed titles as
+   `TrackingMediaKind.ANIME`, which is what engages its Simkl anime tracking. Widen
+   locally. **Never substitute `"series"`** — that would forfeit the main payoff of ADR-001.
+
+2. **`Args.extra` is mistyped.** It declares
+   `extra: { search: string; genre: string; skip: number }` — non-optional, with `skip` as a
+   `number`. At runtime `getRouter` parses extras with `querystring.parse`, so every value
+   is a **string** (or `string[]` for a repeated key) and `extra` is `{}` when absent.
+   Consuming this type would let `args.extra.skip + 1` compile as string concatenation.
+   Define our own runtime-accurate arg types instead.
+
+Also note `addonBuilder` is typed as a **class** whose `defineCatalogHandler` /
+`defineMetaHandler` return **`void`** — they are **not chainable**.
+
+### The SDK's own `.d.ts` (GitHub only, for reference)
+
+The repository's `src/types.d.ts` defines
+`ContentType = "movie" | "series" | "channel" | "tv"` — the same `"anime"` gap. Its
+`ResourceHandlerArgs<TExtra, TConfig>` is generic over extras (`TExtra`), which is closer
+to runtime truth than `@types`' fixed `Args`, but it is not published and cannot be imported.
 
 Key exported types:
 

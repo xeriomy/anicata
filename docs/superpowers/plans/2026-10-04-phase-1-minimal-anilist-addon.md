@@ -75,6 +75,23 @@ These apply to every task. Values are copied verbatim from the spec.
 - `imdbRating` is read as a **string**.
 - `links[]` entries need all three of `name`, `category`, `url`.
 
+**SDK typing reality (verified against the installed package, 2026-10-04)**
+- The published `stremio-addon-sdk@1.6.10` npm tarball ships **no type declarations at
+  all** (`package.json` has no `types`/`typings` field and no `.d.ts` is present). The
+  `.d.ts` files exist only in the GitHub repo. We depend on **`@types/stremio-addon-sdk@1.6.12`**.
+- That package's `ContentType` is `"movie" | "series" | "channel" | "tv"` — **`"anime"` is not
+  in the union.** We use `"anime"` anyway (Nuvio requires it) and widen locally; never
+  switch to `"series"`, which would break Nuvio's `TrackingMediaKind.ANIME` classification
+  and its Simkl anime-list sync — the entire payoff of ADR-001.
+- That package's `Args.extra` is typed `{ search: string; genre: string; skip: number }` —
+  **wrong at runtime.** The SDK parses extras with `querystring.parse`, so every value is a
+  **string** (or `string[]` for a repeated key) and `extra` is `{}` when absent. Define our
+  own runtime-accurate arg types; do **not** consume `Args` for real logic.
+- `addonBuilder` is typed as a **class** whose `defineCatalogHandler`/`defineMetaHandler`
+  return **`void`** — they are not chainable. Call them as separate statements.
+- The `Cache` interface (`{ cacheMaxAge?, staleRevalidate?, staleError? }`) is how a handler
+  returns per-response cache TTLs. `cacheMaxAge` is in **seconds**.
+
 **Engineering**
 - `domain/` imports nothing. Adapters never import each other. `services/` never imports an adapter directly.
 - No `any` in `src/`. Unknown upstream payloads are typed interfaces with optional fields, not `any`.
@@ -1849,16 +1866,25 @@ Expected: FAIL — `Cannot find module '../src/render/index.js'`
 
 - [ ] **Step 3: Implement `src/render/types.ts`**
 
-Extend the SDK's types rather than replacing them, so the handler stays assignable:
+`@types/stremio-addon-sdk@1.6.12` ships `MetaPreview`, `MetaDetail`, `MetaVideo`,
+`MetaLink` and `Cache`. Extend those rather than replacing them, so handlers stay
+assignable:
 
 ```ts
 import type { MetaPreview, MetaDetail } from 'stremio-addon-sdk';
 
+/** Nuvio reads `banner` in preference to `background`. Not in the SDK's types. */
 export interface StremioMetaPreview extends MetaPreview {
   banner?: string;
   landscapePoster?: string;
 }
-export interface StremioMetaDetail extends MetaDetail {
+
+/**
+ * `Omit<MetaDetail, 'videos'>` because the SDK types `videos?: MetaVideo[]` and we
+ * replace it with our own shape. `country`/`language` are Nuvio's names; the standard
+ * `countryOfOrigin`/`audioLanguage` are emitted alongside them.
+ */
+export interface StremioMetaDetail extends Omit<MetaDetail, 'videos'> {
   banner?: string;
   country?: string;
   countryOfOrigin?: string;
@@ -1873,8 +1899,12 @@ export interface StremioMetaVideo {
 }
 ```
 
-No `any`. Use `Omit<MetaDetail, 'videos'>` for the detail base if TS complains
-about `videos` incompatibility.
+**Do not import `Args` or `ContentType` for real logic** — the SDK's `Args.extra` types
+`skip` as `number` while the runtime delivers a **string**, and `ContentType` has no
+`'anime'`. Our own arg types (Task 13) are the runtime-accurate ones.
+
+No `any`. If a manifest or handler assignment fights the SDK's types, widen at that one
+call site with a documented, narrow type — never `as any`.
 
 - [ ] **Step 4: Implement `src/render/preview.ts`**
 
@@ -2126,6 +2156,14 @@ Expected: FAIL — module not found
 import type { Manifest } from 'stremio-addon-sdk';
 import { CATALOG_DEFS } from '../sources/catalog-def.js';
 
+/**
+ * The SDK's `ContentType` union is `"movie" | "series" | "channel" | "tv"` and has no
+ * `"anime"`. Nuvio requires `"anime"` — it labels the type and, crucially, classifies
+ * `anilist:`-prefixed titles as `TrackingMediaKind.ANIME`, which is what engages its
+ * Simkl anime tracking. Widening here is deliberate; never substitute `"series"`.
+ */
+type ContentTypeWithAnime = 'anime' | 'movie' | 'series' | 'channel' | 'tv';
+
 export const ADDON_ID = 'org.anicata.anime';
 export const ADDON_NAME = 'AniCata Anime';
 
@@ -2161,10 +2199,21 @@ export function buildManifest(version: string): Manifest {
 
 Run: `npx vitest run test/manifest.test.ts` → Expected: 11 passed
 
-If `Manifest` types reject `idPrefixes` on a resource object or `logo` as a
-relative string, widen the local variable to
-`Manifest & { idPrefixes?: string[] }` rather than casting to `any`, and note the
-SDK typing gap in a comment.
+`Manifest` types will reject two things this manifest legitimately uses. Widen the
+**return type** of `buildManifest` rather than casting the object to `any`:
+
+```ts
+export type AniCataManifest = Omit<Manifest, 'types'> & {
+  types: ContentTypeWithAnime[];
+  logo: string;
+};
+```
+
+Both the SDK's resource object and `logo` handling are loose at runtime — `logo` is passed
+through untouched and Nuvio resolves a root-relative `/logo.png` against the manifest host
+(verified from `AddonManifestParser.resolveAgainstManifest`). The narrower type is a
+documentation improvement, not a behaviour change. Note each widening with a comment
+saying it is a gap in the SDK's types rather than in our manifest.
 
 - [ ] **Step 5: Write the failing manifest-size-guard test**
 
@@ -2232,8 +2281,17 @@ git commit -m "feat: manifest builder with Nuvio-required routing and gating"
 - Consumes: `CatalogService` (Task 8), `renderPreview` (Task 10), `buildManifest` (Task 12)
 - Produces:
   - `parseExtra(extra: Record<string, string | string[]> | undefined): { search?: string; genre?: string; skip: number }`
-  - `createCatalogHandler(deps: { catalogService: CatalogService }): CatalogHandler`
+  - `export interface CatalogArgs { type: string; id: string; extra?: Record<string, string | string[]> }`
+  - `createCatalogHandler(deps: { catalogService: CatalogService }): (args: CatalogArgs) => Promise<{ metas: StremioMetaPreview[] } & Cache>`
   - `test/helpers/serve.ts` — `startServer(): Promise<{ url: string; close(): Promise<void> }>` which boots the real express app on port 0
+
+  **Do not type these off the SDK's `Args`.** `@types/stremio-addon-sdk` declares
+  `extra: { search: string; genre: string; skip: number }` — non-optional, with `skip` as a
+  `number`. At runtime the SDK parses extras with `querystring.parse`, so every value is a
+  **string** (or `string[]` for a repeated key) and `extra` is `{}` when absent. Consuming
+  the SDK's type would let `args.extra.skip + 1` compile as string concatenation.
+  `parseExtra`'s signature above is the runtime-accurate one, and it is what makes
+  `parseExtra` handle `undefined`, a non-numeric `skip`, and repeated-key arrays.
 
 - [ ] **Step 1: Write the failing extras test**
 
@@ -2314,7 +2372,12 @@ git commit -m "feat: catalog handler with extras parsing and search routing"
 - Produces:
   - `type ParsedMetaId = { namespace: 'anilist' | 'kitsu'; value: string }`
   - `parseMetaId(raw: string): ParsedMetaId | null` — `null` for anything unrecognised
-  - `createMetaHandler(deps: { metaService: MetaService }): MetaHandler`
+  - `export interface MetaArgs { type: string; id: string }`
+  - `createMetaHandler(deps: { metaService: MetaService }): (args: MetaArgs) => Promise<{ meta: StremioMetaDetail } & Cache>`
+
+  `MetaArgs.type` is a plain `string`, **not** the SDK's `ContentType`: that union is
+  `"movie" | "series" | "channel" | "tv"` and omits `"anime"`, which is exactly the type
+  this add-on emits and Nuvio requires.
 
 - [ ] **Step 1: Write the failing id-parsing tests**
 
@@ -2572,10 +2635,11 @@ Expected: FAIL — `Cannot find module '../src/index.js'`
 `TokenBucket({ capacity: rateLimit, refillPerMinute: rateLimit })` →
 `TTLCache({ maxEntries })` → `AniListSource({ http, limiter, log, titleLang })` →
 `CatalogService` / `MetaService` (overridable via `overrides`) →
-`addonBuilder(buildManifest(pkgVersion))` with
-`defineCatalogHandler(createCatalogHandler(...))` and
-`defineMetaHandler(createMetaHandler(...))` → `getRouter(builder)` mounted on a bare
-express app.
+`new addonBuilder(buildManifest(pkgVersion))`, then call
+`builder.defineCatalogHandler(createCatalogHandler(...))` and
+`builder.defineMetaHandler(createMetaHandler(...))` as **two separate statements** — the
+SDK's types declare these as returning `void`, so they are not chainable — then
+`getRouter(builder)` mounted on a bare express app.
 
 **Mount `public/` as static assets**, otherwise the manifest's `logo: '/logo.png'`
 404s and Nuvio shows a broken image in the add-on list:
