@@ -7,4 +7,17 @@ export default tseslint.config(
   { ignores: ['dist/', 'node_modules/', 'coverage/'] },
   eslint.configs.recommended,
   ...tseslint.configs.recommended,
+  {
+    files: ['src/domain/**/*.ts'],
+    rules: { 'no-restricted-imports': ['error', { patterns: ['**/*'] }] },
+  },
+  {
+    files: ['src/sources/anilist/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        { patterns: ['../jikan/**', '../kitsu/**', '../tmdb/**', '../anizip/**'] },
+      ],
+    },
+  },
 );
