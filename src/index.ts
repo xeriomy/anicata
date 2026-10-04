@@ -42,7 +42,12 @@ export interface AppDeps {
 function toExtraRecord(
   extra: Record<string, unknown> | undefined,
 ): Record<string, string | string[]> | undefined {
-  if (extra === undefined) {
+  // `== null` rather than `=== undefined`: this is the only code on the
+  // catalogue path that runs OUTSIDE the handler's try/catch (it sits in the
+  // SDK's lambda, ahead of the promise the handler returns), so a throw here
+  // would be the one way to bypass the no-5xx guarantee. `Object.entries(null)`
+  // throws, so the guard is closed even though qs.parse never yields null today.
+  if (extra == null) {
     return undefined;
   }
   const out: Record<string, string | string[]> = {};

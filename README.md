@@ -188,15 +188,13 @@ Honest list — Phase 1 is a slice, not the whole design:
   are Phase 5.
 - **`titleLang` is NOT wired** (see Install above): the SDK router discards
   the query string, so titles always resolve in English for now.
-- **Live 404-vs-`null` gap (found 2026-10-04).** The unit suite assumes
-  AniList answers HTTP 200 with `data.Media: null` for an unknown id, but the
-  live API returns **HTTP 404** with that body, so adapter-level
-  `fetchById(99999999)` throws `invalid_request` instead of returning `null`.
-  End-user impact is contained — `MetaService` catches it and Nuvio still gets
-  a valid empty result — but the 60 s negative-cache entry is skipped, so
-  repeated lookups of the same unknown id re-hit upstream. Fixing it means a
-  small `src/` change (surface the 404 body to the adapter); deferred to the
-  controller as it touches Task 7's tested contract.
+- ~~**Live 404-vs-`null` gap**~~ — **FIXED in Phase 1.** The opt-in live suite
+  found that AniList answers an unknown id with **HTTP 404**, not HTTP 200, so
+  `fetchById` used to throw where its contract promised `null`, and the 60 s
+  negative-cache entry was skipped — letting repeated unknown-id lookups drain
+  the 30 req/min budget. `AniListSource.fetchById` now maps a 404 to `null`
+  (narrowly: a 400 still throws, so malformed queries are not masked). Verified
+  live: `fetchById(99999999) → null`, 4/4 live tests passing.
 - **No on-device verification by the agent.** Installing in real Nuvio and
   walking the Phase 1 exit gate (`docs/roadmap.md` Phase 1) is a human step
   that has not been performed.

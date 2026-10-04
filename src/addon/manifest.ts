@@ -62,7 +62,9 @@ export function buildManifest(version: string): AniCataManifest {
     id: ADDON_ID,
     version,
     name: ADDON_NAME,
-    description: 'Anime catalogues and metadata from AniList, with Kitsu fallback.',
+    // Served to Nuvio in the add-on list. Must not advertise anything Phase 1
+    // does not ship: Kitsu/TMDB/AniZip arrive in Phases 2-4.
+    description: 'Anime catalogues and metadata from AniList.',
     logo: '/logo.png',
     types: ['anime', 'movie'],
     idPrefixes: ['anilist:', 'kitsu:'],
