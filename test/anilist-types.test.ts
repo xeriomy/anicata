@@ -24,8 +24,13 @@ describe('recorded AniList fixtures', () => {
     expect(data.Media!.tags![0]!.category).toBeTypeOf('string'); // String, not object
   });
 
-  it('unknown id fixture is data.Media === null with no errors', () => {
-    const res = load<{ data?: { Media: AniListMedia | null } }>('./fixtures/meta-null.json');
+  it('unknown id fixture carries BOTH a 404 errors array and Media: null', () => {
+    const res = load<{
+      data?: { Media: AniListMedia | null };
+      errors?: Array<{ message: string; status: number }>;
+    }>('./fixtures/meta-null.json');
     expect(res.data?.Media).toBeNull();
+    // AniList reports "not found" as BOTH an error entry and a null Media.
+    expect(res.errors?.[0]?.status).toBe(404);
   });
 });
