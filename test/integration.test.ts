@@ -54,6 +54,34 @@ describe('GET /manifest.json', () => {
     expect(logo.headers['content-type']).toMatch(/^image\//);
     expect(logo.body.length).toBeGreaterThan(0);
   });
+
+  it('serves a logo big enough to actually render, not a 1x1 placeholder', async () => {
+    // Regression guard. The repository shipped a 1x1, 67-byte placeholder PNG
+    // that satisfied every assertion above - a 1x1 pixel IS a valid image/png
+    // and is certainly longer than zero bytes - so the test passed while Nuvio
+    // rendered an empty tile in the add-on list. Confirmed on device: the logo
+    // pane was blank. These assertions are about usefulness, not plumbing.
+    const res = await supertest(app).get('/logo.png');
+    const png = res.body as Buffer;
+
+    // PNG layout: 8-byte signature, then IHDR at offset 8. Width and height are
+    // big-endian uint32 at bytes 16 and 20.
+    expect(png.subarray(0, 8)).toEqual(
+      Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    );
+    expect(png.subarray(12, 16).toString('latin1')).toBe('IHDR');
+
+    const width = png.readUInt32BE(16);
+    const height = png.readUInt32BE(20);
+    // Add-on list tiles are rendered at roughly 96-192dp. Anything under 64px
+    // cannot survive that; the placeholder was 1px.
+    expect(width, 'logo width').toBeGreaterThanOrEqual(64);
+    expect(height, 'logo height').toBeGreaterThanOrEqual(64);
+    expect(width, 'logo should be square').toBe(height);
+
+    // A real image at >=64px, RGBA, is comfortably above 1 KB. 67 bytes is not.
+    expect(png.length, 'logo byte size').toBeGreaterThan(1024);
+  });
 });
 
 describe('GET /catalog/:type/:id.json', () => {

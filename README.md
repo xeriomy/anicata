@@ -107,6 +107,13 @@ One-line layer summary:
   cache, source and services; mounts `public/` (logo), a 24 h
   `Cache-Control` on `/manifest.json`, and the SDK router. Importing it never
   binds a port; only `node dist/index.js` listens.
+
+  `public/logo.png` is generated, not hand-drawn: run
+  `node scripts/generate-logo.mjs` to rebuild it. It is a 512×512 PNG written
+  directly with Node's built-in `zlib`, so the project needs no image
+  dependency. Do not replace it with a placeholder — a 1×1 PNG satisfies every
+  plumbing assertion (`200`, `image/png`, non-empty) and renders as an empty
+  tile in Nuvio's add-on list, which is exactly the bug that shipped once.
 - **`src/addon/`** — protocol layer only: manifest builder (+ 8 KB size
   assertion), catalog handler (parses `skip`/`search` extras), meta handler
   (parses `anilist:<id>`, never returns non-200).
