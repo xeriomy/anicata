@@ -3,7 +3,7 @@ import type { Anime } from '../../domain/anime.js';
 import type { HttpClient } from '../../net/http.js';
 import type { TokenBucket } from '../../net/limiter.js';
 import type { Logger } from '../../util/logger.js';
-import type { AniListMedia, AniListGraphQLResponse } from './types.js';
+import type { AniListMedia, AniListGraphQLResponse, AniListPage } from './types.js';
 import { CATALOG_QUERY, META_QUERY, SEARCH_QUERY } from './queries.js';
 import { ANILIST_PER_PAGE } from '../catalog-def.js';
 import type { AniListPageQuery } from '../catalog-def.js';
@@ -24,20 +24,10 @@ export interface AniListSourceDeps {
   titleLang?: 'english' | 'romaji' | 'native';
 }
 
-// Shape of a Page payload as handed to the adapter: the Page object itself,
-// optionally accompanied by a GraphQL errors array (AniList answers HTTP 200
-// for GraphQL-level failures).
-interface PagePayload {
-  pageInfo: {
-    total: number;
-    currentPage: number;
-    lastPage: number;
-    hasNextPage: boolean;
-    perPage: number;
-  };
-  media: AniListMedia[] | null;
-  errors?: Array<{ message: string; status: number }>;
-}
+// Catalogue (Page) responses arrive in the standard GraphQL envelope:
+// {"data":{"Page":{pageInfo, media}}}. A null Page or a null media list means
+// the page is exhausted or filtered out, not a transient failure.
+type CatalogResponse = AniListGraphQLResponse<{ Page: AniListPage<AniListMedia> | null }>;
 
 interface GraphQLError {
   message: string;
@@ -77,12 +67,12 @@ export class AniListSource {
     if (q.genre !== undefined) {
       variables.genre = q.genre;
     }
-    const body = await this.post<PagePayload>(CATALOG_QUERY, variables);
+    const body = await this.post<CatalogResponse>(CATALOG_QUERY, variables);
     return this.toPageResult(body);
   }
 
   async search(term: string, page: number): Promise<{ items: Anime[]; total: number }> {
-    const body = await this.post<PagePayload>(SEARCH_QUERY, {
+    const body = await this.post<CatalogResponse>(SEARCH_QUERY, {
       search: term,
       perPage: ANILIST_PER_PAGE,
       page,
@@ -116,7 +106,7 @@ export class AniListSource {
     const out: Anime[] = [];
     for (let i = 0; i < anilistIds.length; i += IDS_CHUNK_SIZE) {
       const chunk = anilistIds.slice(i, i + IDS_CHUNK_SIZE);
-      const body = await this.post<PagePayload>(IDS_QUERY, {
+      const body = await this.post<CatalogResponse>(IDS_QUERY, {
         ids: chunk,
         perPage: IDS_CHUNK_SIZE,
       });
@@ -124,7 +114,7 @@ export class AniListSource {
       if (firstError !== undefined) {
         throw toSourceError(firstError);
       }
-      for (const m of body.media ?? []) {
+      for (const m of body.data?.Page?.media ?? []) {
         if (m != null) {
           out.push(normalizeMedia(m, { titleLang: this.titleLang }));
         }
@@ -133,17 +123,21 @@ export class AniListSource {
     return out;
   }
 
-  private toPageResult(body: PagePayload): { items: Anime[]; total: number } {
+  private toPageResult(body: CatalogResponse): { items: Anime[]; total: number } {
     const firstError = body.errors?.[0];
     if (firstError !== undefined) {
       throw toSourceError(firstError);
     }
-    if (body.media == null) {
+    const page = body.data?.Page;
+    if (page == null) {
+      throw new SourceError('not_found', 'AniList returned a null Page for this query');
+    }
+    if (page.media == null) {
       throw new SourceError('not_found', 'AniList returned no media for this page');
     }
     return {
-      items: body.media.map((m) => normalizeMedia(m, { titleLang: this.titleLang })),
-      total: body.pageInfo.total,
+      items: page.media.map((m) => normalizeMedia(m, { titleLang: this.titleLang })),
+      total: page.pageInfo.total,
     };
   }
 

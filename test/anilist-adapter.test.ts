@@ -43,7 +43,7 @@ describe('AniListSource.fetchCatalogPage', () => {
     const r = await new AniListSource(d).fetchCatalogPage({ sort: ['TRENDING_DESC'], page: 1, perPage: 50 });
     expect(r.items.length).toBeGreaterThan(0);
     expect(r.items[0]!.identity.anilist).toBeTypeOf('number');
-    expect(r.total).toBe(page1.pageInfo.total);
+    expect(r.total).toBe(page1.data.Page.pageInfo.total);
   });
 
   it('throws kind=rate_limited with retryAfterSeconds when AniList 429s', async () => {
@@ -52,8 +52,23 @@ describe('AniListSource.fetchCatalogPage', () => {
       .rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 42 });
   });
 
-  it('throws kind=not_found when AniList returns data.media === null', async () => {
-    await expect(new AniListSource(deps([{ pageInfo: {}, media: null }]))
+  it('unwraps the data envelope, because the live API returns {"data":{"Page":…}}', async () => {
+    // A bare-PagePayload adapter passes every other test here and returns nothing
+    // in production. This test is the guard.
+    const page = load('./fixtures/catalog-trending.json').data.Page;
+    const d = deps([{ data: { Page: page } }]);
+    const r = await new AniListSource(d).fetchCatalogPage({ sort: ['TRENDING_DESC'], page: 1, perPage: 50 });
+    expect(r.items.length).toBeGreaterThan(0);
+    expect(r.items[0]!.identity.anilist).toBeTypeOf('number');
+  });
+
+  it('throws kind=not_found when AniList returns a null Page', async () => {
+    await expect(new AniListSource(deps([{ data: { Page: null } }]))
+      .fetchCatalogPage({ sort: [], page: 1, perPage: 50 })).rejects.toMatchObject({ kind: 'not_found' });
+  });
+
+  it('throws kind=not_found when the Page carries a null media list', async () => {
+    await expect(new AniListSource(deps([{ data: { Page: { pageInfo: {}, media: null } } }]))
       .fetchCatalogPage({ sort: [], page: 1, perPage: 50 })).rejects.toMatchObject({ kind: 'not_found' });
   });
 
@@ -133,9 +148,9 @@ describe('catalog definitions', () => {
 
 describe('page 1 and page 2 are disjoint (Review Focus #1)', () => {
   it('has no overlapping ids across the two recorded pages', () => {
-    const a = new Set(page1.media.map((m: { id: number }) => m.id));
-    const b = page2.media.map((m: { id: number }) => m.id);
-    expect(page1.media.some((m: { id: number }) => b.includes(m.id))).toBe(false);
-    expect(a.size).toBe(page1.media.length);
+    const a = new Set(page1.data.Page.media.map((m: { id: number }) => m.id));
+    const b = page2.data.Page.media.map((m: { id: number }) => m.id);
+    expect(page1.data.Page.media.some((m: { id: number }) => b.includes(m.id))).toBe(false);
+    expect(a.size).toBe(page1.data.Page.media.length);
   });
 });

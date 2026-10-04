@@ -1,12 +1,14 @@
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
-import type { AniListPage, AniListMedia } from '../src/sources/anilist/types.js';
+import type { AniListPage, AniListMedia, AniListGraphQLResponse } from '../src/sources/anilist/types.js';
 
 const load = <T>(p: string): T => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8'));
 
 describe('recorded AniList fixtures', () => {
   it('catalog fixture parses and has the verified shape', () => {
-    const page = load<AniListPage<AniListMedia>>('./fixtures/catalog-trending.json');
+    const page = load<AniListGraphQLResponse<{ Page: AniListPage<AniListMedia> }>>(
+      './fixtures/catalog-trending.json',
+    ).data?.Page!;
     expect(page.pageInfo.perPage).toBeLessThanOrEqual(50); // clamp verified
     expect(page.media.length).toBeGreaterThan(0);
     const m = page.media[0]!;
