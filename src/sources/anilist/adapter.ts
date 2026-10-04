@@ -82,10 +82,23 @@ export class AniListSource {
   }
 
   async fetchById(anilistId: number): Promise<Anime | null> {
-    const body = await this.post<AniListGraphQLResponse<{ Media: AniListMedia | null }>>(
-      META_QUERY,
-      { id: anilistId },
-    );
+    let body: AniListGraphQLResponse<{ Media: AniListMedia | null }>;
+    try {
+      body = await this.post<AniListGraphQLResponse<{ Media: AniListMedia | null }>>(
+        META_QUERY,
+        { id: anilistId },
+      );
+    } catch (err) {
+      // AniList answers an unknown Media id with HTTP 404 (not HTTP 200 with
+      // data.Media null), and HttpClient surfaces that as a SourceError with
+      // status 404. A Media(id:) 404 means "no such title", so resolve null
+      // and let MetaService write its 60 s negative-cache entry. Only 404 is
+      // converted: a malformed query surfaces as 400 and must still throw.
+      if (err instanceof SourceError && err.status === 404) {
+        return null;
+      }
+      throw err;
+    }
     // Check data.Media BEFORE errors[]: an unknown id carries both a 404
     // errors array AND data.Media null, and that shape means "not found".
     if (body.data != null && body.data.Media == null) {

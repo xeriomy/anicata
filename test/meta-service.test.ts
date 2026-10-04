@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest';
 import { MetaService } from '../src/services/meta.service.js';
 import { TTLCache } from '../src/cache/store.js';
+import { AniListSource } from '../src/sources/anilist/adapter.js';
+import { SourceError } from '../src/domain/errors.js';
 
 const onePiece = { identity: { anilist: 21 }, displayTitle: 'ONE PIECE' } as never;
 
@@ -89,5 +91,26 @@ describe('MetaService.getByAnilistId', () => {
     const second = await s.getByAnilistId(777);
     expect(source.fetchById).toHaveBeenCalledTimes(2);
     expect(second.anime).not.toBeNull();
+  });
+
+  it('stores a 60-second negative entry when the source 404s on an unknown id', async () => {
+    // User-visible consequence of the AniList 404 fix, wired end to end:
+    // HttpClient rejects with a 404 SourceError, the source resolves null
+    // (instead of throwing), so MetaService records the miss for 60 s and
+    // reports cacheMaxAge 60. A throw would leave no entry and report 10,
+    // sending every repeat lookup back upstream against the 30 req/min budget.
+    const getJson = vi.fn().mockRejectedValue(
+      new SourceError('invalid_request', 'GET https://graphql.anilist.co failed with status 404', 404),
+    );
+    const source = new AniListSource({
+      http: { getJson } as never,
+      limiter: { tryAcquire: () => true, available: () => 25, msUntilNextToken: () => 0 } as never,
+    });
+    const cache = new TTLCache();
+    const s = new MetaService({ source, cache });
+    const r = await s.getByAnilistId(99999999);
+    expect(r.anime).toBeNull();
+    expect(r.cacheMaxAge).toBe(60);
+    expect(cache.get('meta:anilist:99999999')).toBeDefined();
   });
 });

@@ -4,6 +4,7 @@ import { AniListSource } from '../src/sources/anilist/adapter.js';
 import { CATALOG_DEFS, PAGE_SIZE, ANILIST_PER_PAGE } from '../src/sources/catalog-def.js';
 import { CATALOG_QUERY, SEARCH_QUERY } from '../src/sources/anilist/queries.js';
 import type { SourceErrorKind } from '../src/domain/errors.js';
+import { SourceError } from '../src/domain/errors.js';
 
 const load = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8'));
 
@@ -119,6 +120,21 @@ describe('AniListSource.fetchById', () => {
     // AniList answers HTTP 200 for an unknown id; the adapter must still yield null.
     const d = deps([{ data: { Media: null } }]);
     await expect(new AniListSource(d).fetchById(99999999)).resolves.toBeNull();
+  });
+
+  it('returns null when HttpClient rejects with a 404 SourceError (live unknown-id shape)', async () => {
+    // Live AniList answers an unknown Media id with HTTP 404, so HttpClient
+    // throws before the adapter can inspect the body. That 404 means
+    // "not found" and must resolve to null so MetaService negative-caches it.
+    const d = deps([new SourceError('invalid_request', 'GET https://graphql.anilist.co failed with status 404', 404)]);
+    await expect(new AniListSource(d).fetchById(99999999)).resolves.toBeNull();
+  });
+
+  it('still throws invalid_request when HttpClient rejects with a 400 SourceError', async () => {
+    // Guard against blanket-converting every 4xx to null: a malformed query
+    // surfaces as 400 and must remain an error, not a missing title.
+    const d = deps([new SourceError('invalid_request', 'GET https://graphql.anilist.co failed with status 400', 400)]);
+    await expect(new AniListSource(d).fetchById(21)).rejects.toMatchObject({ kind: 'invalid_request', status: 400 });
   });
 });
 
