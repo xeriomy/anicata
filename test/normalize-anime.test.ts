@@ -83,10 +83,26 @@ describe('normalizeMedia', () => {
     expect(normalizeMedia({ ...onePiece, relations: null }, { titleLang: 'english' }).relations).toEqual([]);
   });
 
-  it('survives a fully-null title by falling back to Untitled', () => {
+  it('falls back to a synonym when all three primary titles are blank', () => {
+    // A blank name makes Nuvio SILENTLY DROP the catalogue item. One Piece's real
+    // fixture has synonyms, so preferring a synonym over 'Untitled' keeps the item
+    // visible. Only fall to 'Untitled' when there is genuinely no name at all.
     const b = normalizeMedia({ ...onePiece, title: { romaji: null, english: null, native: null } },
                               { titleLang: 'english' });
+    expect(b.displayTitle).not.toBe('Untitled');
+    expect(onePiece.synonyms).toContain(b.displayTitle);
+  });
+
+  it('falls back to Untitled only when titles AND synonyms are all blank', () => {
+    const b = normalizeMedia(
+      { ...onePiece, title: { romaji: null, english: null, native: null }, synonyms: [] },
+      { titleLang: 'english' },
+    );
     expect(b.displayTitle).toBe('Untitled');
+  });
+
+  it('populates title.synonyms from AniList synonyms', () => {
+    expect(a.title.synonyms).toEqual(onePiece.synonyms ?? []);
   });
 
   it('survives an entirely empty payload without throwing', () => {

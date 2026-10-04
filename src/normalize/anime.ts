@@ -67,9 +67,7 @@ export function normalizeMedia(
     ...(m.title?.native != null ? { native: m.title.native } : {}),
   };
   const title: AnimeTitle = { synonyms: m.synonyms ?? [], ...titleFields };
-  // Resolve from the title fields only (m.title has no synonyms): a fully-null
-  // title falls back to 'Untitled' even when synonyms are present.
-  const displayTitle = resolveDisplayTitle({ synonyms: [], ...titleFields }, opts.titleLang);
+  const displayTitle = resolveDisplayTitle(title, opts.titleLang);
 
   const description = normalizeDescription(m.description);
   const season = normalizeSeason(m.season);
