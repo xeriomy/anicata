@@ -1025,7 +1025,7 @@ describe('normalizeMedia', () => {
   });
 
   it('populates title.synonyms from AniList synonyms', () => {
-    expect(anime.title.synonyms).toEqual(onePiece.synonyms ?? []);
+    expect(a.title.synonyms).toEqual(onePiece.synonyms ?? []);
   });
 
   it('survives an entirely empty payload without throwing', () => {
