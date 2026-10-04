@@ -483,6 +483,39 @@ Not validated: `logo`, `background`, `contactEmail`, unknown keys.
 
 ---
 
+## 9a. Type declarations: GitHub has them, npm does not
+
+Verified 2026-10-04 by installing the package and inspecting it.
+
+**GitHub repository** (`Stremio/stremio-addon-sdk`) contains seven declaration files:
+
+```
+src/builder.d.ts  src/getRouter.d.ts  src/index.d.ts  src/landingTemplate.d.ts
+src/publishToCentral.d.ts  src/serveHTTP.d.ts  src/types.d.ts
+```
+
+**The published npm package contains none of them.** `node_modules/stremio-addon-sdk/` holds
+only `.js` files, `docs/`, `examples/`, `test/` and `cli/`; `package.json` declares
+`main: ./src/index.js` with **no `types` or `typings` field**, and its `files` field is
+absent — so npm is not filtering them out via an allowlist; they simply are not in the
+tarball.
+
+> **This is exactly the documentation-vs-artifact discrepancy that the research quality
+> rules warn about, and this document originally made that mistake.** The original claim
+> came from reading the cloned repository, which does have the declarations. Anyone who
+> followed it would have had Tasks 10, 12, 13, 14 and 15 fail to compile.
+
+**Resolution:** add `@types/stremio-addon-sdk@1.6.12` as a devDependency. It is a
+zero-dependency package exporting `index.d.ts` and `landingTemplate.d.ts`, and it covers
+every type we need — with the two accuracy gaps in §8, both handled by defining our own arg
+types and widening `ContentType`.
+
+For reference, the repository's `src/types.d.ts` defines
+`ContentType = "movie" | "series" | "channel" | "tv"` — the same `"anime"` gap as
+`@types`. Its `ResourceHandlerArgs<TExtra, TConfig>` is generic over extras (`TExtra`),
+which is closer to runtime truth than `@types`' fixed `Args`, but it is not published and
+therefore not importable.
+
 ## 10. Recommendations
 
 1. **Use the SDK** — it gives us CORS, linting, handler coverage, and the
