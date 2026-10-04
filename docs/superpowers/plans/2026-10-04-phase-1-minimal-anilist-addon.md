@@ -1006,10 +1006,26 @@ describe('normalizeMedia', () => {
     expect(normalizeMedia({ ...onePiece, relations: null }, { titleLang: 'english' }).relations).toEqual([]);
   });
 
-  it('survives a fully-null title by falling back to Untitled', () => {
+  it('falls back to a synonym when all three primary titles are blank', () => {
+    // A blank name makes Nuvio SILENTLY DROP the catalogue item. One Piece's real
+    // fixture has synonyms, so preferring a synonym over 'Untitled' keeps the item
+    // visible. Only fall to 'Untitled' when there is genuinely no name at all.
     const b = normalizeMedia({ ...onePiece, title: { romaji: null, english: null, native: null } },
                               { titleLang: 'english' });
+    expect(b.displayTitle).not.toBe('Untitled');
+    expect(onePiece.synonyms).toContain(b.displayTitle);
+  });
+
+  it('falls back to Untitled only when titles AND synonyms are all blank', () => {
+    const b = normalizeMedia(
+      { ...onePiece, title: { romaji: null, english: null, native: null }, synonyms: [] },
+      { titleLang: 'english' },
+    );
     expect(b.displayTitle).toBe('Untitled');
+  });
+
+  it('populates title.synonyms from AniList synonyms', () => {
+    expect(anime.title.synonyms).toEqual(onePiece.synonyms ?? []);
   });
 
   it('survives an entirely empty payload without throwing', () => {
@@ -1073,6 +1089,10 @@ Rules, all pinned by the tests:
   pad month/day to 2 digits, treat a missing month/day as `01`/`01`.
 - `airing`: set only when `m.nextAiringEpisode != null`.
 - `hashtags`: `m.hashtag ? [m.hashtag] : []`.
+- `title.synonyms`: `m.synonyms ?? []`, and **`displayTitle` must be resolved with
+  those real synonyms in scope** — pass the populated title object to
+  `resolveDisplayTitle`, not one with `synonyms: []`. A blank `name` makes Nuvio
+  silently drop the item, so any real name beats `'Untitled'`.
 - `countryOfOrigin`: `m.countryOfOrigin ?? undefined` (AniList's only origin value; the
   renderer fans it out to both `country` and `countryOfOrigin`).
 - Every collection access must tolerate `null`. **No `any`, no non-null `!` on
