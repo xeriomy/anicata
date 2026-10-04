@@ -2546,14 +2546,14 @@ describe('GET /catalog/:type/:id.json', () => {
   });
 
   it('serves the skip extra as a path segment', async () => {
-    const res = await supertest(app).get('/catalog/anime/anime-trending.json/skip=100');
+    const res = await supertest(app).get('/catalog/anime/anime-trending/skip=100.json');
     expect(res.status).toBe(200);
     expect(res.body.metas).toEqual([]);
     expect(res.headers['cache-control']).toContain('max-age=60');
   });
 
   it('serves search as a path-segment extra', async () => {
-    const res = await supertest(app).get('/catalog/anime/anime-search.json/search=bebop');
+    const res = await supertest(app).get('/catalog/anime/anime-search/search=bebop.json');
     expect(res.status).toBe(200);
     expect(res.body.metas).toHaveLength(1);
   });
@@ -2609,7 +2609,7 @@ describe('never returns a non-200', () => {
                         search: async () => { throw new Error('boom'); } } as never,
     });
     for (const path of ['/catalog/anime/anime-trending.json',
-                        '/catalog/anime/anime-search.json/search=x',
+                        '/catalog/anime/anime-search/search=x.json',
                         '/meta/anime/anilist%3A1.json',
                         '/meta/anime/garbage.json',
                         '/manifest.json']) {
