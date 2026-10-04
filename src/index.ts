@@ -1,0 +1,135 @@
+import express from 'express';
+import { createServer } from 'node:http';
+import { createRequire } from 'node:module';
+import { dirname, join } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import type { Args, Cache, ContentType, Manifest, MetaDetail } from 'stremio-addon-sdk';
+import { buildManifest } from './addon/manifest.js';
+import { createCatalogHandler } from './addon/catalog.js';
+import { createMetaHandler } from './addon/meta.js';
+import { loadAppConfig } from './config/index.js';
+import { HttpClient } from './net/http.js';
+import { TokenBucket } from './net/limiter.js';
+import { TTLCache } from './cache/store.js';
+import { AniListSource } from './sources/anilist/adapter.js';
+import { CatalogService } from './services/catalog.service.js';
+import { MetaService } from './services/meta.service.js';
+import { createLogger } from './util/logger.js';
+
+const require = createRequire(import.meta.url);
+
+// `stremio-addon-sdk` is CommonJS without detectable named ESM exports, so a
+// static named import fails at runtime. `require` returns the full
+// `module.exports`; the cast restores the SDK's declared types at this one
+// boundary. No `any` involved.
+const sdk = require('stremio-addon-sdk') as typeof import('stremio-addon-sdk');
+
+const pkg = require('../package.json') as { version: string };
+
+export interface AppDeps {
+  catalogService: CatalogService;
+  metaService: MetaService;
+}
+
+/**
+ * Narrow bridge at the SDK boundary. The SDK types catalog `extra` as a fixed
+ * `{ search: string; genre: string; skip: number }`, but its router hands us
+ * the raw querystring map (all strings, possibly sparse — `skip` arrives as a
+ * string, not a number). Rebuild the wire shape our handler parses, dropping
+ * anything unexpected. `undefined` passes through so a missing extra still
+ * means "first page".
+ */
+function toExtraRecord(
+  extra: Record<string, unknown> | undefined,
+): Record<string, string | string[]> | undefined {
+  if (extra === undefined) {
+    return undefined;
+  }
+  const out: Record<string, string | string[]> = {};
+  for (const [key, value] of Object.entries(extra)) {
+    if (typeof value === 'string') {
+      out[key] = value;
+    } else if (
+      Array.isArray(value) &&
+      value.every((entry): entry is string => typeof entry === 'string')
+    ) {
+      out[key] = value;
+    }
+  }
+  return out;
+}
+
+// The manifest route has no handler, so the SDK router emits no Cache-Control
+// for it. The manifest only changes on deploy: cache it for a day here. This
+// is deliberately per-route — a global serveHTTP cache would fight the
+// per-resource TTLs the handlers return (10 s on error, 7 days on meta).
+const MANIFEST_CACHE_CONTROL = 'max-age=86400, public';
+
+// The SDK's declared meta signature. Our handler returns `StremioMetaDetail`,
+// which intentionally omits the SDK's required `MetaVideo.released` (Nuvio
+// renders `videos: []` without it) and carries the Nuvio-only spellings. The
+// runtime shape is what Nuvio parses; this alias documents the single boundary
+// where our accurate types meet the SDK's declared ones. No `any` involved.
+type SdkMetaHandler = (args: { type: ContentType; id: string }) => Promise<
+  { meta: MetaDetail } & Cache
+>;
+
+export function createApp(overrides?: Partial<AppDeps>): express.Express {
+  const config = loadAppConfig(process.env);
+  const log = createLogger(config.logLevel);
+  const http = new HttpClient({ timeoutMs: config.httpTimeoutMs });
+  const limiter = new TokenBucket({
+    capacity: config.anilistRateLimitPerMinute,
+    refillPerMinute: config.anilistRateLimitPerMinute,
+  });
+  const cache = new TTLCache({ maxEntries: config.cacheMaxEntries });
+  const source = new AniListSource({ http, limiter, log });
+  const catalogService = overrides?.catalogService ?? new CatalogService({ source, cache, log });
+  const metaService = overrides?.metaService ?? new MetaService({ source, cache, log });
+
+  const builder = new sdk.addonBuilder(
+    // Documented: `AniCataManifest` widens the SDK's `Manifest` with the
+    // Nuvio-required `'anime'` type (see `addon/manifest.ts`); the SDK passes
+    // these strings through untouched at runtime.
+    buildManifest(pkg.version) as Manifest,
+  );
+  const catalogHandle = createCatalogHandler({ catalogService });
+  // Two separate statements: the SDK types these as returning `void`, so they
+  // are not chainable. The catalog lambda widens `Args` to the wire shape at
+  // this single call site (see `toExtraRecord`); the meta cast below is the
+  // one documented exception for the return side (see `SdkMetaHandler`).
+  builder.defineCatalogHandler((args: Args) => {
+    const extra = toExtraRecord(args.extra);
+    if (extra === undefined) {
+      return catalogHandle({ type: args.type, id: args.id });
+    }
+    return catalogHandle({ type: args.type, id: args.id, extra });
+  });
+  builder.defineMetaHandler(createMetaHandler({ metaService }) as SdkMetaHandler);
+
+  const app = express();
+  const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
+  app.use('/', express.static(publicDir, { maxAge: '1d', fallthrough: true }));
+  app.use('/manifest.json', (_req, res, next) => {
+    res.setHeader('Cache-Control', MANIFEST_CACHE_CONTROL);
+    next();
+  });
+  app.use(sdk.getRouter(builder.getInterface()));
+  return app;
+}
+
+export function start(): void {
+  const config = loadAppConfig(process.env);
+  const log = createLogger(config.logLevel);
+  const app = createApp();
+  const server = createServer(app);
+  server.listen(config.port, () => {
+    log.info('listening', { url: `http://127.0.0.1:${config.port}/manifest.json` });
+  });
+}
+
+// Importing this module (as the integration tests do) must not bind a port;
+// only `node dist/index.js` starts listening.
+if (process.argv[1] !== undefined && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  start();
+}
