@@ -240,20 +240,22 @@ disk cache, deployment config.
       `zlib`), and the test now asserts PNG signature, dimensions ≥64×64, squareness and
       >1 KB — verified to fail against the old placeholder. Re-verified rendering in the
       Nuvio add-on list on device.
-- [ ] All catalogs on Home ✅ **verified on device 2026-10-05** — all three rows render
-      (Trending, Top Rated, Search). Scroll-to-paginate not separately confirmed.
-- [ ] Search returns results ✅ **verified on device 2026-10-05** — "attack on titan"
-      returned 4 titled results with artwork. Genre filter is Phase 5, so not applicable yet.
-- [ ] Details page: poster, synopsis, genres, rating ✅ **verified on device 2026-10-05**
+- [x] All catalogs on Home ✅ **verified on device 2026-10-05** — all three rows render
+      (Trending, Top Rated, Search)
+- [ ] Scroll triggers pagination correctly — not separately confirmed on device
+- [x] Search returns results ✅ **verified on device 2026-10-05** — "attack on titan"
+      returned 4 titled results with artwork
+- [ ] Genre filter works — Phase 5, not applicable yet
+- [x] Details page: poster, genres, rating render ✅ **verified on device 2026-10-05**
       (Attack on Titan / `anilist:16498`: poster, `Action • Drama • Fantasy`, `2013`,
       `24m`, `IMDb 8.5`, synopsis with Show More, `FINISHED`).
       Critically, `Origin Country: JP` and `Original Language: JA` both rendered, which
       confirms the dual `country`/`countryOfOrigin` and `language`/`audioLanguage` emission
-      works against a real client. `links[]` not visually confirmed (the ⋯ menu was not
-      opened). "Playback unavailable" is expected — `videos: []` until AniZip in Phase 4.
-      Note: Nuvio labels this section "Movie Details" for all types; that string is
-      hardcoded (`DetailAdditionalInfoSection.kt:36` → `details_movie_details`) and is
-      not something an add-on can influence.
+      works against a real client. "Playback unavailable" is expected — `videos: []` until
+      AniZip in Phase 4. Note: Nuvio labels this section "Movie Details" for all types;
+      that string is hardcoded (`DetailAdditionalInfoSection.kt:36` →
+      `details_movie_details`) and is not something an add-on can influence.
+- [ ] `links[]` renders — the Nuvio details overflow (⋯) menu was not opened
 - [ ] **Anime classification + tracking engages** (Simkl section present)
 - [ ] Empty search shows a clean "no results" — no error banner
 - [ ] Kill the add-on → Nuvio degrades gracefully
