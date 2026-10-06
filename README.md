@@ -191,6 +191,34 @@ Honest list — Phase 1 is a slice, not the whole design:
   enrichment and episode data are Phases 2–4. AniList is the single upstream.
 - **`videos[]` is always empty.** No episode list until AniZip lands (Phase 4);
   Nuvio renders a clean details page without it.
+- **Trakt library / watch progress will not work — this is structural, not a
+  bug, and not fixable by returning more ids.** Verified in Nuvio's client
+  source: `TraktLibraryRepository.hasAnyId()` accepts only `trakt`, `imdb` and
+  `tmdb`; `TraktIdUtils.parseTraktContentIds("anilist:21")` returns null for all
+  three; and `LibraryItem.imdbId` is computed as `id.takeIf { it.startsWith("tt") }`,
+  which **discards** the `imdb_id` field Nuvio parses from our payload. So no
+  id field we could add would help — only an id string literally starting with
+  `tt` would. AniList cannot supply one either: `Media` exposes just `id`,
+  `idMal` and `externalLinks`, and sampling `externalLinks` for five
+  unambiguously IMDb-covered titles yielded zero IMDb ids.
+
+  Switching the canonical id to `tt` was measured and rejected: across the
+  20,840 titles in `Fribb/anime-lists` that carry an `anilist_id`, only 38.1%
+  have an IMDb id and 39.6% a TMDB id — **60.1% have neither**. That trade
+  would cost Trakt support for most of the catalogue *and* forfeit the Simkl
+  anime tracking the `anilist:` prefix enables.
+
+  **Nuvio still classifies these titles correctly** — it parses the prefix,
+  marks them as anime and offers Add to Library / Mark as Watched; only the
+  final Trakt mutation fails. Enable **Simkl** rather than Trakt to exercise
+  tracking: Nuvio resolves `anilist:` to Simkl itself via
+  `simkl.com/search/id?anilist=…`, and Simkl coverage is 64.2% versus IMDb's
+  38.1%.
+- **`links[]` are not displayed by Nuvio.** The parser extracts `links[]` only
+  into `director` / `writer` / `cast`, and neither `links[]` nor `website` has
+  any display consumer. Our AniList and MyAnimeList entries are sent
+  correctly and are simply inert. Harmless, and the right thing to send for
+  spec compliance and for other Stremio clients.
 - **Only 3 catalogues.** Genre catalogues and the remaining curated catalogues
   are Phase 5.
 - **`titleLang` is NOT wired** (see Install above): the SDK router discards

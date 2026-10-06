@@ -229,7 +229,11 @@ disk cache, deployment config.
 - [ ] Kitsu rate-limit behaviour observed and self-limiter tuned
 
 ### On-device (manual, real Nuvio)
-- [ ] Install from a URL and from a `stremio://` link
+- [x] Install from a URL ✅ **verified on device 2026-10-05**
+- [ ] Install from a `stremio://` link — **N/A without TLS.** `AddonRepository.kt:477`
+      rewrites `stremio://` to `https://` unconditionally, so a plain-HTTP add-on cannot
+      serve it ("Unable to parse TLS packet header"). `http://` passes through untouched
+      at :476, which is why direct URL install works. Deployment concern (Phase 8).
 - [x] Manifest logo renders in the add-on list ✅ **verified on device 2026-10-05**
       The repo shipped a 1×1, 67-byte placeholder `public/logo.png`. It satisfied every
       assertion the integration test made (a 1×1 pixel *is* a valid `image/png`, and is
@@ -242,7 +246,7 @@ disk cache, deployment config.
       Nuvio add-on list on device.
 - [x] All catalogs on Home ✅ **verified on device 2026-10-05** — all three rows render
       (Trending, Top Rated, Search)
-- [ ] Scroll triggers pagination correctly — not separately confirmed on device
+- [x] Scroll triggers pagination correctly ✅ **verified on device 2026-10-05**
 - [x] Search returns results ✅ **verified on device 2026-10-05** — "attack on titan"
       returned 4 titled results with artwork
 - [ ] Genre filter works — Phase 5, not applicable yet
@@ -255,10 +259,22 @@ disk cache, deployment config.
       AniZip in Phase 4. Note: Nuvio labels this section "Movie Details" for all types;
       that string is hardcoded (`DetailAdditionalInfoSection.kt:36` →
       `details_movie_details`) and is not something an add-on can influence.
-- [ ] `links[]` renders — the Nuvio details overflow (⋯) menu was not opened
-- [ ] **Anime classification + tracking engages** (Simkl section present)
-- [ ] Empty search shows a clean "no results" — no error banner
-- [ ] Kill the add-on → Nuvio degrades gracefully
+- [x] `links[]` — **N/A: Nuvio cannot render them.** The parser extracts `links[]` only
+      into director/writer/cast; neither `links[]` nor `website` has a display consumer.
+      The details overflow (⋯) menu is the *tracking* menu, not a links menu. Ours are
+      sent correctly and inert. See README → Known limitations.
+- [ ] **Anime classification + tracking engages** — partially evidenced on device:
+      Nuvio parsed our `anilist:` id, classified the titles as trackable and offered
+      Add to Library / Mark as Watched. Completion then failed at the **Trakt** step,
+      which is structural (see README → Known limitations). Re-test with **Simkl**
+      enabled to confirm the anime-tracking claim Phase 1 actually made.
+- [x] Empty search behaves identically to every other add-on ✅ **verified on device
+      2026-10-05.** Nuvio renders zero results as a "Search failed" card for ALL add-ons:
+      `SearchRepository.kt:459` calls `require(items.isNotEmpty())`, which throws. We return
+      HTTP 200 + `metas: []`, the correct protocol behaviour. The original gate wording
+      ("a clean no-results, no error banner") demanded an experience Nuvio does not offer
+      anyone, and was withdrawn as mis-specified.
+- [x] Kill the add-on → Nuvio degrades gracefully ✅ **verified on device 2026-10-05**
 
 ### Contract conformance
 - [ ] Validate against `stremio-addon-client`
