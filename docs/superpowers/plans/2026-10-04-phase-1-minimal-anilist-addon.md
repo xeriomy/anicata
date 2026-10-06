@@ -14,7 +14,7 @@ is a TTL + stale-while-revalidate + single-flight store; `net/` owns fetch,
 timeouts and the rate limiter. No framework, no database.
 
 **Tech Stack:** TypeScript 5 · Node.js 22 · `stremio-addon-sdk` 1.6.10 ·
-Vitest 3 · ESLint 9 (flat config) · Prettier 3 · `undici` (Node 22 native `fetch`)
+Vitest 3 · ESLint 9 (flat config) · Prettier 3 · Node 22 native `fetch` (no HTTP client dep)
 
 **Spec:** [`docs/architecture.md`](../../architecture.md) ·
 [`docs/nuvio-compatibility.md`](../../nuvio-compatibility.md) ·
@@ -52,11 +52,19 @@ These apply to every task. Values are copied verbatim from the spec.
 - `perPage` is **silently clamped to 50**. One Nuvio page of 100 = **2** AniList requests.
 - Only one search argument exists: `search`. There is no `search_as_broad`, no `searchByAlias`.
 - `MediaTag.category` is a **String**. `MediaTag` has `isMediaSpoiler`, **not** `isSpoiler`; `isMediaRelevant` does not exist.
-- `studies.edges` are `StudioEdge` → field is `isMain`. Only `relations.edges` uses `MediaEdge`.
+- `studios.edges` are `StudioEdge` → field is `isMain`. Only `relations.edges` uses `MediaEdge`.
 - Use `coverImage.extraLarge` for posters. `coverImage.large` is a medium-sized URL and `medium` is small; the names lie. `color` is a hex string.
 - `duration` is an `Int` in minutes. `averageScore` is an `Int` 0–100. `nextAiringEpisode` may be `null`.
 - `Page.media` `pageInfo.total` is capped at 5000 — never treat it as the true total.
-- `Media(id:)` for a nonexistent id returns `{"data":{"Media":null}}` with HTTP 200 — not an error.
+- `Media(id:)` for a nonexistent id returns HTTP 200 with **both** an `errors` array
+  (`status: 404`, message `"Not Found."`) **and** `data.Media: null` — verified live.
+  Discriminate on `data.Media`, never on `errors` alone: a malformed query instead returns
+  `data: null` with `status: 400` and no `Media` key.
+- **Every GraphQL response is wrapped in a `data` envelope.** A catalogue query returns
+  `{"data":{"Page":{"pageInfo":…,"media":[…]}}}`; `Media(id:)` returns
+  `{"data":{"Media":…}}`. **Fixtures must preserve this envelope** — a fixture trimmed
+  to the bare inner object makes an adapter that ignores `data` pass every test and
+  return nothing in production.
 - Rate limit is **30 req/min** (`x-ratelimit-limit: 30`). Client limiter defaults to 25/min.
 
 **Nuvio (all verified from client source)**
@@ -66,6 +74,23 @@ These apply to every task. Values are copied verbatim from the spec.
 - `banner` is Nuvio's preferred wide-art field, taking precedence over `background`.
 - `imdbRating` is read as a **string**.
 - `links[]` entries need all three of `name`, `category`, `url`.
+
+**SDK typing reality (verified against the installed package, 2026-10-04)**
+- The published `stremio-addon-sdk@1.6.10` npm tarball ships **no type declarations at
+  all** (`package.json` has no `types`/`typings` field and no `.d.ts` is present). The
+  `.d.ts` files exist only in the GitHub repo. We depend on **`@types/stremio-addon-sdk@1.6.12`**.
+- That package's `ContentType` is `"movie" | "series" | "channel" | "tv"` — **`"anime"` is not
+  in the union.** We use `"anime"` anyway (Nuvio requires it) and widen locally; never
+  switch to `"series"`, which would break Nuvio's `TrackingMediaKind.ANIME` classification
+  and its Simkl anime-list sync — the entire payoff of ADR-001.
+- That package's `Args.extra` is typed `{ search: string; genre: string; skip: number }` —
+  **wrong at runtime.** The SDK parses extras with `querystring.parse`, so every value is a
+  **string** (or `string[]` for a repeated key) and `extra` is `{}` when absent. Define our
+  own runtime-accurate arg types; do **not** consume `Args` for real logic.
+- `addonBuilder` is typed as a **class** whose `defineCatalogHandler`/`defineMetaHandler`
+  return **`void`** — they are not chainable. Call them as separate statements.
+- The `Cache` interface (`{ cacheMaxAge?, staleRevalidate?, staleError? }`) is how a handler
+  returns per-response cache TTLs. `cacheMaxAge` is in **seconds**.
 
 **Engineering**
 - `domain/` imports nothing. Adapters never import each other. `services/` never imports an adapter directly.
@@ -81,11 +106,11 @@ These apply to every task. Values are copied verbatim from the spec.
 Five input classes or failure modes the spec implies that a naive implementation
 would get wrong. Each has a test pinned to the task that owns the code.
 
-1. **`skip` past the end, or a short upstream page.** A reasonable person expects pagination to stop cleanly. Naive code loops forever or returns duplicates, and Nuvio kills the row after 3 duplicate pages. → Task 7
-2. **AniList returning `{"data":{"Media":null}}` with HTTP 200** for an unknown id. Naive code checks `resp.ok` and treats this as success, rendering a meta with `name: null`. → Task 9
-3. **`pageInfo.total` capped at 5000.** Code that computes page count from `total / perPage` will offer ~100 pages for every catalogue and silently truncate. → Task 7
+1. **`skip` past the end, or a short upstream page.** A reasonable person expects pagination to stop cleanly. Naive code loops forever or returns duplicates, and Nuvio kills the row after 3 duplicate pages. → Task 8
+2. **AniList returning `{"data":{"Media":null}}` with HTTP 200** for an unknown id. Naive code checks `resp.ok` and treats this as success, rendering a meta with `name: null`. → Task 7 (adapter) and Task 9 (service)
+3. **`pageInfo.total` capped at 5000.** Code that computes page count from `total / perPage` will offer ~100 pages for every catalogue and silently truncate. → Task 8 (the service must never derive pages from `total`)
 4. **Concurrent identical requests to the same uncached key.** Without single-flight, a cold cache under Nuvio's parallel Home-row fetch issues N identical AniList requests and burns the 30/min budget instantly. → Task 4
-5. **Title with all three AniList titles null-ish / whitespace-only.** Naive `title.english ?? title.romaji` yields `undefined`, and Nuvio **silently drops** any item with a blank `name`. → Task 6
+5. **Title with all three AniList titles null-ish / whitespace-only.** Naive `title.english ?? title.romaji` yields `undefined`, and Nuvio **silently drops** any item with a blank `name`. → Task 5 (`resolveDisplayTitle`) and Task 6 (`normalizeMedia`)
 
 ---
 
@@ -96,20 +121,20 @@ anicata/
 ├── package.json                  npm scripts, deps
 ├── tsconfig.json                 strict, NodeNext
 ├── vitest.config.ts
-├── eslint.config.js              includes the layer boundary rules (Task 1)
+├── eslint.config.js              layer boundary rules added in Task 5
 ├── .prettierrc.json
 ├── .gitignore
 ├── .env.example
 ├── README.md
 ├── docs/                         (already written by the research phase)
-├── public/logo.png               1×1 transparent PNG placeholder (Task 1)
+├── public/logo.png               1×1 transparent PNG placeholder (Task 1), served by Task 15
 │
 ├── test/
 │   ├── fixtures/
 │   │   ├── catalog-trending.json    recorded AniList Page response (Task 2)
 │   │   ├── catalog-search.json      recorded AniList search response (Task 2)
 │   │   ├── meta-21.json             recorded AniList Media(id:21) response (Task 2)
-│   │   └── meta-null.json          recorded `{"data":{"Media":null}}` (Task 2)
+│   │   └── meta-null.json          recorded 404 errors[] + Media:null (Task 2)
 │   ├── helpers/serve.ts            boot the HTTP server on an ephemeral port
 │   ├── manifest.test.ts
 │   ├── cache.test.ts
@@ -265,7 +290,7 @@ they are what force explicit handling of AniList's many nullable fields.
 `vitest.config.ts` — `test: { environment: 'node', include: ['test/**/*.test.ts'] }`.
 
 `eslint.config.js` — flat config from `@eslint/js` + `typescript-eslint`
-recommended, plus the layer boundary rules from Task 2 onward (add them there).
+recommended. Layer boundary rules are added in Task 5, which owns the boundary.
 
 `.prettierrc.json` — `{ "singleQuote": true, "trailingComma": "all", "printWidth": 100 }`.
 
@@ -347,8 +372,12 @@ append as `catalog-trending-p2.json` (needed to prove `skip=100` differs).
 Post `SEARCH_QUERY` with `{"search":"cowboy bebop","perPage":50,"page":1,"sort":["SEARCH_MATCH"]}` →
 `test/fixtures/catalog-search.json`.
 Post `META` with `{"id":21}` → `test/fixtures/meta-21.json` (One Piece).
-Post `META` with `{"id":99999999}` → `test/fixtures/meta-null.json` — must be
-literally `{"data":{"Media":null}}`. Verify this before committing; it is the
+Post `META` with `{"id":99999999}` → `test/fixtures/meta-null.json`.
+**Verified live shape** (this is what AniList actually returns — keep the real bytes):
+```json
+{"errors":[{"message":"Not Found.","status":404,"locations":[{"line":1,"column":16}]}],"data":{"Media":null}}
+```
+It carries BOTH an `errors` array and `data.Media: null`. That combination is the
 fixture that pins Review Focus #2.
 
 Also record one **live edge case** for later: an id whose `title.english`,
@@ -357,7 +386,10 @@ catalogue page. If none exists in the first page, skip it and note that
 Review Focus #5 is covered by a synthetic fixture in Task 6 instead.
 
 Trim each fixture to a small size (5–10 media entries) with `json.dumps`, keeping
-full fidelity of every field. Do not hand-edit field values.
+full fidelity of every field. **Keep the top-level `data` envelope exactly as AniList
+returned it** — trim the entries *inside* `data.Page.media`, never the envelope
+itself. A fixture trimmed to the bare inner object makes an adapter that ignores
+`data` pass every test and return nothing in production. Do not hand-edit field values.
 
 - [ ] **Step 2: Write `src/sources/anilist/queries.ts`**
 
@@ -399,9 +431,14 @@ describe('recorded AniList fixtures', () => {
     expect(data.Media!.tags![0]!.category).toBeTypeOf('string'); // String, not object
   });
 
-  it('unknown id fixture is data.Media === null with no errors', () => {
-    const res = load<{ data?: { Media: AniListMedia | null } }>('./fixtures/meta-null.json');
+  it('unknown id fixture carries BOTH a 404 errors array and Media: null', () => {
+    const res = load<{
+      data?: { Media: AniListMedia | null };
+      errors?: Array<{ message: string; status: number }>;
+    }>('./fixtures/meta-null.json');
     expect(res.data?.Media).toBeNull();
+    // AniList reports "not found" as BOTH an error entry and a null Media.
+    expect(res.errors?.[0]?.status).toBe(404);
   });
 });
 ```
@@ -994,10 +1031,26 @@ describe('normalizeMedia', () => {
     expect(normalizeMedia({ ...onePiece, relations: null }, { titleLang: 'english' }).relations).toEqual([]);
   });
 
-  it('survives a fully-null title by falling back to Untitled', () => {
+  it('falls back to a synonym when all three primary titles are blank', () => {
+    // A blank name makes Nuvio SILENTLY DROP the catalogue item. One Piece's real
+    // fixture has synonyms, so preferring a synonym over 'Untitled' keeps the item
+    // visible. Only fall to 'Untitled' when there is genuinely no name at all.
     const b = normalizeMedia({ ...onePiece, title: { romaji: null, english: null, native: null } },
                               { titleLang: 'english' });
+    expect(b.displayTitle).not.toBe('Untitled');
+    expect(onePiece.synonyms).toContain(b.displayTitle);
+  });
+
+  it('falls back to Untitled only when titles AND synonyms are all blank', () => {
+    const b = normalizeMedia(
+      { ...onePiece, title: { romaji: null, english: null, native: null }, synonyms: [] },
+      { titleLang: 'english' },
+    );
     expect(b.displayTitle).toBe('Untitled');
+  });
+
+  it('populates title.synonyms from AniList synonyms', () => {
+    expect(a.title.synonyms).toEqual(onePiece.synonyms ?? []);
   });
 
   it('survives an entirely empty payload without throwing', () => {
@@ -1061,6 +1114,10 @@ Rules, all pinned by the tests:
   pad month/day to 2 digits, treat a missing month/day as `01`/`01`.
 - `airing`: set only when `m.nextAiringEpisode != null`.
 - `hashtags`: `m.hashtag ? [m.hashtag] : []`.
+- `title.synonyms`: `m.synonyms ?? []`, and **`displayTitle` must be resolved with
+  those real synonyms in scope** — pass the populated title object to
+  `resolveDisplayTitle`, not one with `synonyms: []`. A blank `name` makes Nuvio
+  silently drop the item, so any real name beats `'Untitled'`.
 - `countryOfOrigin`: `m.countryOfOrigin ?? undefined` (AniList's only origin value; the
   renderer fans it out to both `country` and `countryOfOrigin`).
 - Every collection access must tolerate `null`. **No `any`, no non-null `!` on
@@ -1164,8 +1221,22 @@ describe('AniListSource.fetchCatalogPage', () => {
       .rejects.toMatchObject({ kind: 'rate_limited', retryAfterSeconds: 42 });
   });
 
-  it('throws kind=not_found when AniList returns data.media === null', async () => {
-    await expect(new AniListSource(deps([{ pageInfo: {}, media: null }]))
+  it('unwraps the data envelope, because the live API returns {"data":{"Page":…}}', async () => {
+    // A bare-PagePayload adapter passes every other test here and returns nothing
+    // in production. This test is the guard.
+    const d = deps([{ data: { Page: load('./fixtures/catalog-trending.json') } }]);
+    const r = await new AniListSource(d).fetchCatalogPage({ sort: ['TRENDING_DESC'], page: 1, perPage: 50 });
+    expect(r.items.length).toBeGreaterThan(0);
+    expect(r.items[0]!.identity.anilist).toBeTypeOf('number');
+  });
+
+  it('throws kind=not_found when AniList returns a null Page', async () => {
+    await expect(new AniListSource(deps([{ data: { Page: null } }]))
+      .fetchCatalogPage({ sort: [], page: 1, perPage: 50 })).rejects.toMatchObject({ kind: 'not_found' });
+  });
+
+  it('throws kind=not_found when the Page carries a null media list', async () => {
+    await expect(new AniListSource(deps([{ data: { Page: { pageInfo: {}, media: null } } }]))
       .fetchCatalogPage({ sort: [], page: 1, perPage: 50 })).rejects.toMatchObject({ kind: 'not_found' });
   });
 
@@ -1204,6 +1275,12 @@ describe('AniListSource.fetchById', () => {
   it('returns null, NOT an error, when data.Media is null', async () => {
     const d = deps([{ data: { Media: null } }]);
     expect(await new AniListSource(d).fetchById(99999999)).toBeNull();
+  });
+
+  it('still returns null when a 404 errors array accompanies Media: null', async () => {
+    // The real AniList shape. An "errors present -> throw" rule would fail here.
+    const d = deps([{ errors: [{ message: 'Not Found.', status: 404 }], data: { Media: null } }]);
+    await expect(new AniListSource(d).fetchById(99999999)).resolves.toBeNull();
   });
 
   it('preserves that null-media behaviour across the HttpClient boundary', async () => {
@@ -1278,10 +1355,25 @@ Sorts: `anime-trending` → `['TRENDING_DESC']`; `anime-top-rated` → `['SCORE_
 - `limiter.tryAcquire()` false → `throw new SourceError('rate_limited', 'anilist limiter empty')`.
 - Body: `JSON.stringify({ query, variables })`, `Content-Type: application/json`.
 - `pageInfo.perPage` from the response, not the request (it may be clamped).
-- `search` and `fetchCatalogPage`: `data.media === null` → `SourceError('not_found')`.
-  This is deliberate — an exhausted/filtered page is not a transient failure.
-- Presence of `errors[]` → `SourceError('invalid_request', errors[0].message, errors[0].status)`.
-  A 429-shaped GraphQL error maps to `'rate_limited'`.
+- **Unwrap the `data` envelope for catalogue queries too**, exactly as `fetchById`
+  already does for `Media`. Type the response as
+  `AniListGraphQLResponse<{ Page: AniListPage<AniListMedia> | null }>` and read
+  `body.data?.Page` — do **not** type the response as a bare `PagePayload`. AniList
+  returns `{"data":{"Page":{…}}}`, so a bare-typed adapter finds `undefined` against
+  the live API while passing every fixture-based test.
+- `search` and `fetchCatalogPage`: `body.data?.Page == null` **or**
+  `page.media === null` → `SourceError('not_found')`. This is deliberate — an
+  exhausted or filtered page is not a transient failure.
+- **Discriminate on `data.Media` before ever consulting `errors[]`.** AniList
+  answers an unknown id with **both** `errors[{status:404}]` **and**
+  `data.Media: null`, so a naive "errors present → throw" rule turns a not-found
+  into an exception and breaks the `fetchById` contract below. Order:
+  1. `data?.Media == null` on a `fetchById` → return `null` (**not** an error),
+     regardless of any `errors[]` alongside it.
+  2. Otherwise, if `errors[]` is non-empty → `SourceError('invalid_request',
+     errors[0].message, errors[0].status)`. A malformed query lands here because
+     it returns `data: null` with `status: 400` and no `Media` key.
+  3. A 429-shaped GraphQL error maps to `'rate_limited'`.
 - `fetchById`: `data.Media === null` → return `null` (**not** an error). This is
   the fixture-pinned Review Focus #2 case.
 - `fetchByIds`: post `Media(id_in: …)` in chunks of 50 (verified supported) and
@@ -1774,16 +1866,25 @@ Expected: FAIL — `Cannot find module '../src/render/index.js'`
 
 - [ ] **Step 3: Implement `src/render/types.ts`**
 
-Extend the SDK's types rather than replacing them, so the handler stays assignable:
+`@types/stremio-addon-sdk@1.6.12` ships `MetaPreview`, `MetaDetail`, `MetaVideo`,
+`MetaLink` and `Cache`. Extend those rather than replacing them, so handlers stay
+assignable:
 
 ```ts
 import type { MetaPreview, MetaDetail } from 'stremio-addon-sdk';
 
+/** Nuvio reads `banner` in preference to `background`. Not in the SDK's types. */
 export interface StremioMetaPreview extends MetaPreview {
   banner?: string;
   landscapePoster?: string;
 }
-export interface StremioMetaDetail extends MetaDetail {
+
+/**
+ * `Omit<MetaDetail, 'videos'>` because the SDK types `videos?: MetaVideo[]` and we
+ * replace it with our own shape. `country`/`language` are Nuvio's names; the standard
+ * `countryOfOrigin`/`audioLanguage` are emitted alongside them.
+ */
+export interface StremioMetaDetail extends Omit<MetaDetail, 'videos'> {
   banner?: string;
   country?: string;
   countryOfOrigin?: string;
@@ -1798,8 +1899,12 @@ export interface StremioMetaVideo {
 }
 ```
 
-No `any`. Use `Omit<MetaDetail, 'videos'>` for the detail base if TS complains
-about `videos` incompatibility.
+**Do not import `Args` or `ContentType` for real logic** — the SDK's `Args.extra` types
+`skip` as `number` while the runtime delivers a **string**, and `ContentType` has no
+`'anime'`. Our own arg types (Task 13) are the runtime-accurate ones.
+
+No `any`. If a manifest or handler assignment fights the SDK's types, widen at that one
+call site with a documented, narrow type — never `as any`.
 
 - [ ] **Step 4: Implement `src/render/preview.ts`**
 
@@ -2051,6 +2156,14 @@ Expected: FAIL — module not found
 import type { Manifest } from 'stremio-addon-sdk';
 import { CATALOG_DEFS } from '../sources/catalog-def.js';
 
+/**
+ * The SDK's `ContentType` union is `"movie" | "series" | "channel" | "tv"` and has no
+ * `"anime"`. Nuvio requires `"anime"` — it labels the type and, crucially, classifies
+ * `anilist:`-prefixed titles as `TrackingMediaKind.ANIME`, which is what engages its
+ * Simkl anime tracking. Widening here is deliberate; never substitute `"series"`.
+ */
+type ContentTypeWithAnime = 'anime' | 'movie' | 'series' | 'channel' | 'tv';
+
 export const ADDON_ID = 'org.anicata.anime';
 export const ADDON_NAME = 'AniCata Anime';
 
@@ -2086,10 +2199,21 @@ export function buildManifest(version: string): Manifest {
 
 Run: `npx vitest run test/manifest.test.ts` → Expected: 11 passed
 
-If `Manifest` types reject `idPrefixes` on a resource object or `logo` as a
-relative string, widen the local variable to
-`Manifest & { idPrefixes?: string[] }` rather than casting to `any`, and note the
-SDK typing gap in a comment.
+`Manifest` types will reject two things this manifest legitimately uses. Widen the
+**return type** of `buildManifest` rather than casting the object to `any`:
+
+```ts
+export type AniCataManifest = Omit<Manifest, 'types'> & {
+  types: ContentTypeWithAnime[];
+  logo: string;
+};
+```
+
+Both the SDK's resource object and `logo` handling are loose at runtime — `logo` is passed
+through untouched and Nuvio resolves a root-relative `/logo.png` against the manifest host
+(verified from `AddonManifestParser.resolveAgainstManifest`). The narrower type is a
+documentation improvement, not a behaviour change. Note each widening with a comment
+saying it is a gap in the SDK's types rather than in our manifest.
 
 - [ ] **Step 5: Write the failing manifest-size-guard test**
 
@@ -2157,8 +2281,17 @@ git commit -m "feat: manifest builder with Nuvio-required routing and gating"
 - Consumes: `CatalogService` (Task 8), `renderPreview` (Task 10), `buildManifest` (Task 12)
 - Produces:
   - `parseExtra(extra: Record<string, string | string[]> | undefined): { search?: string; genre?: string; skip: number }`
-  - `createCatalogHandler(deps: { catalogService: CatalogService }): CatalogHandler`
+  - `export interface CatalogArgs { type: string; id: string; extra?: Record<string, string | string[]> }`
+  - `createCatalogHandler(deps: { catalogService: CatalogService }): (args: CatalogArgs) => Promise<{ metas: StremioMetaPreview[] } & Cache>`
   - `test/helpers/serve.ts` — `startServer(): Promise<{ url: string; close(): Promise<void> }>` which boots the real express app on port 0
+
+  **Do not type these off the SDK's `Args`.** `@types/stremio-addon-sdk` declares
+  `extra: { search: string; genre: string; skip: number }` — non-optional, with `skip` as a
+  `number`. At runtime the SDK parses extras with `querystring.parse`, so every value is a
+  **string** (or `string[]` for a repeated key) and `extra` is `{}` when absent. Consuming
+  the SDK's type would let `args.extra.skip + 1` compile as string concatenation.
+  `parseExtra`'s signature above is the runtime-accurate one, and it is what makes
+  `parseExtra` handle `undefined`, a non-numeric `skip`, and repeated-key arrays.
 
 - [ ] **Step 1: Write the failing extras test**
 
@@ -2239,7 +2372,12 @@ git commit -m "feat: catalog handler with extras parsing and search routing"
 - Produces:
   - `type ParsedMetaId = { namespace: 'anilist' | 'kitsu'; value: string }`
   - `parseMetaId(raw: string): ParsedMetaId | null` — `null` for anything unrecognised
-  - `createMetaHandler(deps: { metaService: MetaService }): MetaHandler`
+  - `export interface MetaArgs { type: string; id: string }`
+  - `createMetaHandler(deps: { metaService: MetaService }): (args: MetaArgs) => Promise<{ meta: StremioMetaDetail } & Cache>`
+
+  `MetaArgs.type` is a plain `string`, **not** the SDK's `ContentType`: that union is
+  `"movie" | "series" | "channel" | "tv"` and omits `"anime"`, which is exactly the type
+  this add-on emits and Nuvio requires.
 
 - [ ] **Step 1: Write the failing id-parsing tests**
 
@@ -2378,6 +2516,16 @@ describe('GET /manifest.json', () => {
     const res = await supertest(app).get('/manifest.json');
     expect(res.headers['access-control-allow-origin']).toBe('*');
   });
+
+  it('serves the manifest logo at the path the manifest declares', async () => {
+    const manifest = await supertest(app).get('/manifest.json');
+    const logoPath = manifest.body.logo as string;
+    expect(logoPath).toBe('/logo.png');
+    const logo = await supertest(app).get(logoPath);
+    expect(logo.status).toBe(200);
+    expect(logo.headers['content-type']).toMatch(/^image\//);
+    expect(logo.body.length).toBeGreaterThan(0);
+  });
 });
 
 describe('GET /catalog/:type/:id.json', () => {
@@ -2398,14 +2546,14 @@ describe('GET /catalog/:type/:id.json', () => {
   });
 
   it('serves the skip extra as a path segment', async () => {
-    const res = await supertest(app).get('/catalog/anime/anime-trending.json/skip=100');
+    const res = await supertest(app).get('/catalog/anime/anime-trending/skip=100.json');
     expect(res.status).toBe(200);
     expect(res.body.metas).toEqual([]);
     expect(res.headers['cache-control']).toContain('max-age=60');
   });
 
   it('serves search as a path-segment extra', async () => {
-    const res = await supertest(app).get('/catalog/anime/anime-search.json/search=bebop');
+    const res = await supertest(app).get('/catalog/anime/anime-search/search=bebop.json');
     expect(res.status).toBe(200);
     expect(res.body.metas).toHaveLength(1);
   });
@@ -2461,7 +2609,7 @@ describe('never returns a non-200', () => {
                         search: async () => { throw new Error('boom'); } } as never,
     });
     for (const path of ['/catalog/anime/anime-trending.json',
-                        '/catalog/anime/anime-search.json/search=x',
+                        '/catalog/anime/anime-search/search=x.json',
                         '/meta/anime/anilist%3A1.json',
                         '/meta/anime/garbage.json',
                         '/manifest.json']) {
@@ -2487,10 +2635,26 @@ Expected: FAIL — `Cannot find module '../src/index.js'`
 `TokenBucket({ capacity: rateLimit, refillPerMinute: rateLimit })` →
 `TTLCache({ maxEntries })` → `AniListSource({ http, limiter, log, titleLang })` →
 `CatalogService` / `MetaService` (overridable via `overrides`) →
-`addonBuilder(buildManifest(pkgVersion))` with
-`defineCatalogHandler(createCatalogHandler(...))` and
-`defineMetaHandler(createMetaHandler(...))` → `getRouter(builder)` mounted on a bare
-express app.
+`new addonBuilder(buildManifest(pkgVersion))`, then call
+`builder.defineCatalogHandler(createCatalogHandler(...))` and
+`builder.defineMetaHandler(createMetaHandler(...))` as **two separate statements** — the
+SDK's types declare these as returning `void`, so they are not chainable — then
+`getRouter(builder)` mounted on a bare express app.
+
+**Mount `public/` as static assets**, otherwise the manifest's `logo: '/logo.png'`
+404s and Nuvio shows a broken image in the add-on list:
+
+```ts
+import express from 'express';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');
+app.use('/', express.static(publicDir, { maxAge: '1d', fallthrough: true }));
+```
+
+Because `tsc` emits `dist/index.js` while `public/` stays at the repo root, resolve
+the directory relative to `import.meta.url` as shown — **not** `process.cwd()`.
 
 Read the version from `package.json` at build time via
 `createRequire(import.meta.url)('./package.json').version`, not `process.env.npm_package_version`.
@@ -2505,7 +2669,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
 
 - [ ] **Step 5: Run to verify it passes**
 
-Run: `npx vitest run test/integration.test.ts` → Expected: 15 passed
+Run: `npx vitest run test/integration.test.ts` → Expected: 16 passed
 
 - [ ] **Step 6: Run the full suite, typecheck and lint**
 
@@ -2677,3 +2841,10 @@ emitting `kitsu:` ids (ADR-016).
 - **Proportion.** Function bodies are given only where the tests leave the
   algorithm open (cache `wrap`, LRU eviction, page stitching, extras coercion).
   Everything else is a signature plus pinned assertions.
+- **Pre-flight scan found and closed one load-bearing gap.** The manifest declares
+  `logo: '/logo.png'` and `public/logo.png` is created in Task 1, but no task
+  mounted `public/` as static assets — so the logo would have 404'd in Nuvio and
+  the Phase 1 exit gate "manifest logo renders in the add-on list" would have
+  failed on-device only, after every automated test was green. Task 15 now mounts
+  `express.static` and an integration test fetches the manifest, reads its
+  declared `logo` path, and asserts that path returns a 200 image.
