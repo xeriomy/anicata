@@ -97,16 +97,37 @@ disk cache, deployment config.
 
 ### Exit gate
 
-- [ ] Both adapters pass the same contract test suite (AniList, Kitsu)
+- [ ] Both adapters pass the same contract test suite (AniList, Kitsu) —
+      OPEN: `test/source-port.test.ts` covers AniList only; no shared contract
+      suite runs Kitsu through the same assertions yet.
 - [x] Jikan removed from the chain → **zero** impact by construction ✅
       The service is discontinued, so nothing can call it. Gate satisfied by
       deletion rather than by a resilience mechanism.
-- [ ] AniList 500 → Kitsu-sourced catalogue, comparable item count
-- [ ] AniList 429 → **stale served, zero fallback calls** (assert with a spy)
-- [ ] AniList + Kitsu down → stale (up to 24 h), never 5xx
-- [ ] Empty result → **zero** fallback calls
-- [ ] Every adapter maps to identical `Anime` for equivalent input (snapshot)
-- [ ] Every response still 200, still ≤ 5 s
+- [ ] AniList 500 → Kitsu-sourced catalogue, comparable item count — OPEN:
+      the mechanism is proven (`test/chain.test.ts` "primary 5xx → fallback
+      serves" plus the throwing-primary integration test serving `kitsu:` rows
+      at HTTP 200), but comparable item counts against the live APIs were never
+      measured.
+- [x] AniList 429 → **stale served, zero fallback calls** ✅ proven in two
+      halves 2026-10-07: `test/chain.test.ts` "primary 429 → throws the
+      rate_limited error, fallback spy shows 0 calls" (spy), and
+      `test/catalog-service.test.ts` "serves stale from the cache when the
+      source throws" (stale served on failure; the service path is
+      error-kind-agnostic once a stale entry exists).
+- [ ] AniList + Kitsu down → stale (up to 24 h), never 5xx — OPEN: never-5xx
+      is proven (integration "never returns a non-200" with both services
+      throwing, plus the throwing-chain test), but the catalogue stale window
+      in code is 6 h (`CATALOG_STALE_MS`), not the 24 h this gate text claims.
+- [x] Empty result → **zero** fallback calls ✅ proven 2026-10-07:
+      `test/chain.test.ts` "primary returns empty → success, 0 fallback calls".
+- [ ] Every adapter maps to identical `Anime` for equivalent input (snapshot) —
+      OPEN: no snapshot test exists.
+- [ ] Every response still 200, still ≤ 5 s — OPEN: 200 is proven on every
+      path with the chain in place (integration "fallback chain wiring" plus
+      "never returns a non-200"), and `test/integration.test.ts` proves a
+      hanging primary still answers inside `httpTimeoutMs` (≤ 4000 ms) on the
+      catalogue and meta paths — but search/warm-path timing and live-adapter
+      end-to-end timing were never measured.
 
 ---
 
