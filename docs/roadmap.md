@@ -87,7 +87,8 @@ disk cache, deployment config.
 
 - `sources/types.ts` — the `Source` interface.
 - `sources/kitsu/` — adapter, JSON:API types, `include=genres` handling.
-- `sources/jikan/` — adapter behind `ENABLE_JIKAN` (default off).
+- ~~`sources/jikan/`~~ — **REMOVED 2026-10-07.** Jikan's public API was
+  discontinued on 2026-10-01; it cannot be built or tested. See ADR-004.
 - `net/limiter.ts`, `net/breaker.ts`.
 - `domain/errors.ts` — the error taxonomy.
 - `sources/` orchestration: per-capability chains, timeouts, global deadline.
@@ -96,8 +97,10 @@ disk cache, deployment config.
 
 ### Exit gate
 
-- [ ] All three adapters pass the same contract test suite
-- [ ] Jikan unreachable → **zero** impact on response time
+- [ ] Both adapters pass the same contract test suite (AniList, Kitsu)
+- [x] Jikan removed from the chain → **zero** impact by construction ✅
+      The service is discontinued, so nothing can call it. Gate satisfied by
+      deletion rather than by a resilience mechanism.
 - [ ] AniList 500 → Kitsu-sourced catalogue, comparable item count
 - [ ] AniList 429 → **stale served, zero fallback calls** (assert with a spy)
 - [ ] AniList + Kitsu down → stale (up to 24 h), never 5xx

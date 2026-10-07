@@ -103,29 +103,46 @@ on Node 22). The 8 KB manifest cap becomes a hard design constraint
 
 ---
 
-## ADR-004 — AniList primary, Kitsu first fallback, Jikan optional and last
+## ADR-004 — AniList primary, Kitsu is the sole fallback
 
-**Status:** Accepted
+**Status:** Accepted, amended 2026-10-07 (Jikan removed — see below)
 
 **Context.** The brief proposed AniList → Jikan → Kitsu. Research reordered it.
 
 - **AniList** — best search, tags, relations, airing schedules, trending. ✅ reachable.
-- **Jikan** — ⚠ `api.jikan.moe` **timed out at TCP level** from the research
-  environment on repeated attempts (IPv4 and IPv6) while AniList/Kitsu/AniZip/TMDB
-  all responded normally. Its docs host works, so the service plausibly exists —
-  but we could not verify it. It also has the strictest documented limits
-  (3 req/s, 60 req/min) and is an unauthorised third-party wrapper.
+- **Jikan** — ☠️ **DISCONTINUED.** Re-verified 2026-10-07: `api.jikan.moe` is
+  TCP-silent on ports 80 and 443, over IPv4 *and* IPv6, and by direct IP
+  (`135.181.39.91`) with DNS bypassed — while `jikan.moe` and `docs.api.jikan.moe`
+  both answer HTTP 200, so it is the API host specifically that is gone.
+  The cause is not a network fault: **Jikan's public API was shut down on
+  2026-10-01**, announced in June 2026 on their Discord and corroborated by
+  multiple independent reports in `jikan-me/jikan-rest` issues. The Phase 0
+  research recorded this as UNVERIFIED with the note "design for it being absent"
+  — the right conclusion from an unresolved symptom, but for the wrong reason.
+  A transient outage would have argued for retrying later; a discontinued service
+  argues for never building it.
 - **Kitsu** — ✅ reachable, fast (~70 ms), actively maintained (`updatedAt` current),
   and its `/mappings` endpoint is a first-class keyless MAL↔Kitsu↔AniList bridge.
 
-**Decision.** AniList → **Kitsu** → Jikan (opt-in via `ENABLE_JIKAN`, default off).
+**Decision.** AniList → **Kitsu**, and nothing else. Two independent operators,
+both verified reachable on 2026-10-07 (AniList live at 30 req/min; Kitsu 200 in
+~640 ms with correct JSON:API and `included` genres).
+
+**Amendment (2026-10-07).** Jikan is removed from the chain entirely rather than
+kept behind `ENABLE_JIKAN`. It cannot be tested — our rule is that fixtures must be
+real API captures, and a dead service yields either fabricated fixtures or an
+untested adapter. A third fallback would also duplicate Kitsu's MAL-derived data.
 
 **Alternatives rejected.** Keeping the brief's order would have made an
 unverifiable service the *first* fallback and demoted a verified, faster one.
+**Tenrai** (`api.tenrai.org/v1`, the announced Jikan successor) is alive and
+Jikan-v4-shaped — verified 200 in ~460 ms — and remains a candidate if a third
+source is ever justified by real evidence. It was not adopted now: young service,
+no uptime record, redundant with Kitsu.
 
-**Consequences.** Kitsu's normalisation burden is now on the critical path, so it
-must be correct and well-tested from Phase 2. If Jikan turns out to be healthy,
-enabling it is a one-env-var change.
+**Consequences.** Kitsu's normalisation burden is on the critical path, so it must
+be correct and well-tested from Phase 2. With only one fallback, the circuit
+breaker and stale-serving machinery carry more weight than a longer chain would.
 
 ---
 

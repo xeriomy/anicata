@@ -343,9 +343,25 @@ concurrently.
 * Connection timed out after 25002 milliseconds
 ```
 
-> **UNVERIFIED** whether Jikan is globally down, blocking this network range, or
-> otherwise unavailable. Its documentation is live and describes a normal service.
-> **Do not assume Jikan is a reliable fallback.** Design for it being absent.
+> ✅ **RESOLVED 2026-10-07 — and the answer is worse than "down".**
+> Re-probed: `api.jikan.moe` is TCP-silent on 80 and 443, over IPv4 *and* IPv6, and
+> by direct IP (`135.181.39.91`) with DNS bypassed. Meanwhile `jikan.moe` and
+> `docs.api.jikan.moe` both answer HTTP 200 — so the *website and docs are up* and
+> only the API host is gone. That rules out a local network fault.
+>
+> The cause: **Jikan's public API was discontinued on 2026-10-01**, announced in
+> June 2026 on their Discord, corroborated by multiple independent reports in
+> `jikan-me/jikan-rest`. It is not coming back.
+>
+> **Jikan is removed from the fallback chain (ADR-004).** The Phase 0 note "design
+> for it being absent" was the right call from an unresolved symptom, but the
+> implied cause — transient outage — was wrong, and would have argued for retrying
+> later rather than never building it.
+>
+> **Successor:** Tenrai (`https://api.tenrai.org/v1`), the announced continuation,
+> is alive and Jikan-v4-shaped — verified HTTP 200 in ~460 ms with `{data:{…}}` and
+> snake_case `mal_id`. Not adopted for Phase 2 (young, no uptime record, redundant
+> with Kitsu) but recorded as the candidate if a third source is ever justified.
 
 ### 2.2 Documented characteristics 📄
 
