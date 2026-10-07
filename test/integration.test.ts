@@ -2,6 +2,10 @@ import { describe, it, expect } from 'vitest';
 import supertest from 'supertest';
 import { createApp } from '../src/index.js';
 import type { Anime } from '../src/domain/anime.js';
+import { loadAppConfig } from '../src/config/index.js';
+import { CircuitBreaker } from '../src/net/breaker.js';
+import { SourceChain } from '../src/sources/chain.js';
+import type { AnimeSource, SourcePage } from '../src/sources/types.js';
 
 const fake = (id: number, over: Partial<Anime> = {}): Anime => ({
   identity: { anilist: id }, title: { romaji: `T${id}`, english: `T${id}`, synonyms: [] },
@@ -196,5 +200,153 @@ describe('never returns a non-200', () => {
       expect(res.body.meta.id, path).toBeTruthy();
       expect(res.body.meta.name, path).toBe('Unavailable');
     }
+  });
+});
+
+const kitsuFake = (id: number): Anime =>
+  fake(id, { identity: { kitsu: id }, displayTitle: `K${id}` });
+
+function throwingPrimary(): AnimeSource {
+  const boom = async (): Promise<never> => {
+    throw new Error('primary down');
+  };
+  return {
+    id: 'anilist',
+    fetchPage: boom,
+    search: boom,
+    fetchById: boom,
+  };
+}
+
+function servingFallback(): AnimeSource {
+  return {
+    id: 'kitsu',
+    fetchPage: async (): Promise<SourcePage> => ({ items: [kitsuFake(1)], total: 1 }),
+    search: async (): Promise<SourcePage> => ({ items: [kitsuFake(2)], total: 1 }),
+    fetchById: async (id: number): Promise<Anime | null> => kitsuFake(id),
+  };
+}
+
+function injectedChain(primary: AnimeSource, budgetMs?: number): SourceChain {
+  return new SourceChain({
+    sources: [primary, servingFallback()],
+    breakers: new Map([
+      ['anilist', new CircuitBreaker()],
+      ['kitsu', new CircuitBreaker()],
+    ]),
+    ...(budgetMs === undefined ? {} : { budgetMs }),
+  });
+}
+
+describe('fallback chain wiring (Phase 2)', () => {
+  it('boots with both sources wired: manifest idPrefixes carry anilist: and kitsu:', async () => {
+    const app = createApp();
+    const res = await supertest(app).get('/manifest.json');
+    expect(res.status).toBe(200);
+    expect(res.body.idPrefixes).toContain('anilist:');
+    expect(res.body.idPrefixes).toContain('kitsu:');
+    const metaResource = (res.body.resources as Array<{ idPrefixes?: string[] }>).find(
+      (r) => typeof r === 'object' && r.idPrefixes !== undefined,
+    );
+    expect(metaResource?.idPrefixes).toContain('anilist:');
+    expect(metaResource?.idPrefixes).toContain('kitsu:');
+  });
+
+  it('manifest is unchanged and still fits the 8 KB SDK limit', async () => {
+    const res = await supertest(createApp()).get('/manifest.json');
+    expect(res.status).toBe(200);
+    expect(JSON.stringify(res.body).length).toBeLessThanOrEqual(8192);
+  });
+
+  it('a primary that always throws still yields 200 on every path, served from fallback', async () => {
+    // Injected through AppDeps (`chain`), not by monkey-patching: the real
+    // CatalogService and MetaService run over a chain whose primary throws on
+    // every method. Content assertions (not just status) prove the fallback
+    // served: degrade-to-empty would also be 200.
+    const app = createApp({ chain: injectedChain(throwingPrimary()) });
+    for (const path of ['/catalog/anime/anime-trending.json',
+                        '/catalog/anime/anime-top-rated.json',
+                        '/catalog/anime/anime-search/search=bebop.json',
+                        '/meta/anime/kitsu%3A1.json',
+                        '/meta/anime/anilist%3A21.json',
+                        '/meta/anime/garbage.json',
+                        '/manifest.json']) {
+      const res = await supertest(app).get(path);
+      expect(res.status, path).toBe(200);
+    }
+    const catalog = await supertest(app).get('/catalog/anime/anime-trending.json');
+    expect(catalog.body.metas[0].id).toBe('kitsu:1');
+    const search = await supertest(app).get('/catalog/anime/anime-search/search=bebop.json');
+    expect(search.body.metas[0].id).toBe('kitsu:2');
+    const meta = await supertest(app).get('/meta/anime/kitsu%3A1.json');
+    expect(meta.body.meta.id).toBe('kitsu:1');
+    expect(meta.body.meta.name).toBe('K1');
+    // The anilist:-namespaced id routes to the throwing primary, which has no
+    // cross-namespace fallback: a clean Unavailable placeholder, still 200.
+    const dead = await supertest(app).get('/meta/anime/anilist%3A21.json');
+    expect(dead.body.meta.name).toBe('Unavailable');
+  });
+
+  it('a hanging primary still answers inside httpTimeoutMs via the deadline', async () => {
+    // No sleeps: the primaries below either throw after a delay or never
+    // settle, so completion within the bound proves the chain's deadline
+    // fired. The bound is asserted against the configured httpTimeoutMs
+    // (clamped ≤ 4000 ms, inside Nuvio's 5000 ms meta budget); the 250 ms
+    // chain budget keeps the margin wide enough that CI load cannot flake it.
+    //
+    // Shared-deadline semantics (see SourceChain.execute): each source gets
+    // only the REMAINING budget, never a fresh one. A primary that never
+    // settles therefore consumes the whole budget and the fallback is never
+    // attempted — the answer is a fast degraded-empty 200, not fallback
+    // content. (In production the HttpClient timeout fires first at
+    // httpTimeoutMs < budgetMs, leaving room for the fallback; a bare
+    // never-settling fake has no such inner timeout.) Both shapes are
+    // asserted: slow-then-throwing serves fallback content, never-settling
+    // serves degraded-empty — but both are 200 inside the bound.
+    const limitMs = loadAppConfig(process.env).httpTimeoutMs;
+    expect(limitMs).toBeLessThanOrEqual(4000);
+    const budgetMs = 250;
+
+    const slowThenDead: AnimeSource = {
+      id: 'anilist',
+      fetchPage: async () =>
+        new Promise<SourcePage>((_, reject) => {
+          setTimeout(() => reject(new Error('primary slow death')), 100);
+        }),
+      search: async (): Promise<SourcePage> => {
+        throw new Error('primary down');
+      },
+      fetchById: async (): Promise<Anime | null> => {
+        throw new Error('primary down');
+      },
+    };
+    const slowApp = createApp({ chain: injectedChain(slowThenDead, budgetMs) });
+    const t0 = Date.now();
+    const slowCatalog = await supertest(slowApp).get('/catalog/anime/anime-trending.json');
+    const slowMs = Date.now() - t0;
+    expect(slowCatalog.status).toBe(200);
+    expect(slowCatalog.body.metas[0].id).toBe('kitsu:1');
+    expect(slowMs).toBeLessThan(limitMs);
+
+    const hanging: AnimeSource = {
+      id: 'anilist',
+      fetchPage: () => new Promise<SourcePage>(() => {}),
+      search: () => new Promise<SourcePage>(() => {}),
+      fetchById: () => new Promise<Anime | null>(() => {}),
+    };
+    const hungApp = createApp({ chain: injectedChain(hanging, budgetMs) });
+    const t1 = Date.now();
+    const hungCatalog = await supertest(hungApp).get('/catalog/anime/anime-trending.json');
+    const hungMs = Date.now() - t1;
+    expect(hungCatalog.status).toBe(200);
+    expect(hungCatalog.body.metas).toEqual([]);
+    expect(hungMs).toBeLessThan(limitMs);
+
+    const t2 = Date.now();
+    const meta = await supertest(hungApp).get('/meta/anime/anilist%3A21.json');
+    const metaMs = Date.now() - t2;
+    expect(meta.status).toBe(200);
+    expect(meta.body.meta.name).toBe('Unavailable');
+    expect(metaMs).toBeLessThan(limitMs);
   });
 });

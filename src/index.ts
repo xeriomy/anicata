@@ -32,6 +32,14 @@ const pkg = require('../package.json') as { version: string };
 export interface AppDeps {
   catalogService: CatalogService;
   metaService: MetaService;
+  /**
+   * Optional chain for injection. When provided, the default CatalogService
+   * and MetaService are built over it instead of the internally constructed
+   * AniList → Kitsu chain. Wiring only — no behaviour change when omitted.
+   * Exists so integration tests can inject a throwing or hanging primary
+   * through the composition root rather than by monkey-patching.
+   */
+  chain?: SourceChain;
 }
 
 /**
@@ -104,8 +112,10 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
     // 5000 ms meta budget. A literal here would silently ignore that setting.
     budgetMs: config.httpTimeoutMs,
   });
-  const catalogService = overrides?.catalogService ?? new CatalogService({ source: chain, cache, log });
-  const metaService = overrides?.metaService ?? new MetaService({ source: chain, cache, log });
+  const catalogService =
+    overrides?.catalogService ?? new CatalogService({ source: overrides?.chain ?? chain, cache, log });
+  const metaService =
+    overrides?.metaService ?? new MetaService({ source: overrides?.chain ?? chain, cache, log });
 
   const builder = new sdk.addonBuilder(
     // Documented: `AniCataManifest` widens the SDK's `Manifest` with the
