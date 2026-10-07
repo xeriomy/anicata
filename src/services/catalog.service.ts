@@ -94,10 +94,10 @@ export class CatalogService {
         const hit = this.cache.get<CachedPage>(catalogCacheKey(predicted, args.catalogId, genre, skip));
         if (hit !== undefined) {
           if (hit.freshness === 'fresh') {
-            return this.toResult(hit.value);
+            return this.toResult(hit.value, 'fresh');
           }
           this.refreshCatalog(stickyKey, args.catalogId, req, genre, skip);
-          return { ...this.toResult(hit.value), freshness: 'stale' };
+          return this.toResult(hit.value, 'stale');
         }
       }
       const res = await this.source.fetchPage(args.catalogId, req, stickyKey);
@@ -111,7 +111,7 @@ export class CatalogService {
         value,
         { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
       );
-      return this.toResult(value);
+      return this.toResult(value, 'fresh');
     } catch (err) {
       this.log?.error('catalog page failed', { catalogId: args?.catalogId, err });
       return { items: [], cacheMaxAge: 10, freshness: 'fresh' };
@@ -132,10 +132,10 @@ export class CatalogService {
         const hit = this.cache.get<CachedPage>(searchCacheKey(predicted, term, skip));
         if (hit !== undefined) {
           if (hit.freshness === 'fresh') {
-            return this.toSearchResult(hit.value);
+            return this.toSearchResult(hit.value, 'fresh');
           }
           this.refreshSearch(stickyKey, term, skip);
-          return { ...this.toSearchResult(hit.value), freshness: 'stale' };
+          return this.toSearchResult(hit.value, 'stale');
         }
       }
       const res = await this.source.search(term, skip, PAGE_SIZE, stickyKey);
@@ -144,25 +144,25 @@ export class CatalogService {
         ttlMs: SEARCH_TTL_MS,
         staleMs: CATALOG_STALE_MS,
       });
-      return this.toSearchResult(value);
+      return this.toSearchResult(value, 'fresh');
     } catch (err) {
       this.log?.error('catalog search failed', { err });
       return { items: [], cacheMaxAge: 10, freshness: 'fresh' };
     }
   }
 
-  private toResult(value: CachedPage): CatalogPageResult {
+  private toResult(value: CachedPage, freshness: 'fresh' | 'stale'): CatalogPageResult {
     if (value.items.length === 0) {
-      return { items: value.items, cacheMaxAge: 60, freshness: 'fresh' };
+      return { items: value.items, cacheMaxAge: 60, freshness };
     }
-    return { items: value.items, cacheMaxAge: 900, freshness: 'fresh' };
+    return { items: value.items, cacheMaxAge: freshness === 'stale' ? 30 : 900, freshness };
   }
 
-  private toSearchResult(value: CachedPage): CatalogPageResult {
+  private toSearchResult(value: CachedPage, freshness: 'fresh' | 'stale'): CatalogPageResult {
     if (value.items.length === 0) {
-      return { items: value.items, cacheMaxAge: 60, freshness: 'fresh' };
+      return { items: value.items, cacheMaxAge: 60, freshness };
     }
-    return { items: value.items, cacheMaxAge: 1800, freshness: 'fresh' };
+    return { items: value.items, cacheMaxAge: freshness === 'stale' ? 30 : 1800, freshness };
   }
 
   /**

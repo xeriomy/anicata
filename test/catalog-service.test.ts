@@ -124,6 +124,7 @@ describe('CatalogService.getCatalogPage', () => {
     now += 20 * 60 * 1000; // past the 15-minute TTL, inside the 6-hour stale window
     const second = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
     expect(second.freshness).toBe('stale');
+    expect(second.cacheMaxAge).toBe(30);
     expect(ids(second.items)).toEqual(ids(first.items));
   });
 
