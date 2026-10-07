@@ -184,7 +184,7 @@ Expected: FAIL — module not found.
 
 - [ ] **Step 4: Implement `src/sources/kitsu/types.ts`**
 
-`KitsuListResponse { data: KitsuAnime[]; included?: KitsuIncluded[]; meta?: { totalCount?: number } }`. `KitsuAnime { id: string; type: 'anime'; attributes: {...} }`. Genre entries in `included` have `type: 'genres'`.
+`KitsuListResponse { data: KitsuAnime[]; included?: KitsuIncluded[]; meta?: { count?: number } }` — the real API returns `meta.count` (22494 in the capture), not `totalCount`. `KitsuAnime { id: string; type: 'anime'; attributes: {...} }`. Genre entries in `included` have `type: 'genres'`.
 
 - [ ] **Step 5: Implement `src/sources/kitsu/adapter.ts`**
 
