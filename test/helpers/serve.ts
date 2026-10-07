@@ -1,6 +1,6 @@
 import { createServer } from 'node:http';
 import type express from 'express';
-import { createApp } from '../src/index.js';
+import { createApp } from '../../src/index.js';
 
 export async function startServer(
   app: express.Express = createApp(),

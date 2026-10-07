@@ -48,7 +48,7 @@ const anime: Anime = {
 function fakeService(overrides: {
   getCatalogPage?: (args: { catalogId: string; type: string; genre?: string; skip: number }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
   search?: (args: { term: string; skip: number }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
-}): CatalogService {
+} = {}): CatalogService {
   return {
     getCatalogPage: vi.fn(async () => ({ items: [], cacheMaxAge: 60, freshness: 'fresh' as const })),
     search: vi.fn(async () => ({ items: [], cacheMaxAge: 60, freshness: 'fresh' as const })),

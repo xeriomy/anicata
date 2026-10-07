@@ -2,8 +2,9 @@ import { describe, it, expect, vi } from 'vitest';
 import { CatalogService } from '../src/services/catalog.service.js';
 import { TTLCache } from '../src/cache/store.js';
 import { PAGE_SIZE } from '../src/sources/catalog-def.js';
+import type { Anime } from '../src/domain/anime.js';
 
-const ids = (items: { identity: { anilist: number } }[]) => items.map(i => i.identity.anilist);
+const ids = (items: Anime[]) => items.map(i => i.identity.anilist);
 const mk = (n: number, from = 0) =>
   Array.from({ length: n }, (_, i) => ({ identity: { anilist: from + i } })) as never;
 

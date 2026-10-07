@@ -9,7 +9,15 @@ const load = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url),
 
 function deps(payloads: unknown[]) {
   const queue = [...payloads];
-  const getJson = vi.fn(async () => {
+  // Typed with the (url, init) arity the tests inspect, so mock.calls entries
+  // carry the url and init the helpers read instead of typing as [].
+  const getJson = vi.fn<
+    (url: string, init?: { headers?: Record<string, string> }) => Promise<{
+      data: unknown;
+      headers: Record<string, string>;
+      status: number;
+    }>
+  >(async () => {
     const next = queue.shift();
     if (next instanceof Error) throw next;
     return { data: next, headers: {}, status: 200 };

@@ -17,7 +17,7 @@ const app = createApp({
     // Mirrors the real CatalogService: only the known catalogue resolves, and
     // an empty page carries the 60 s "nothing here" TTL rather than the
     // 900 s full-page TTL.
-    getCatalogPage: async ({ catalogId, skip }) => {
+    getCatalogPage: async ({ catalogId, skip }: { catalogId: string; skip: number }) => {
       const items = catalogId === 'anime-trending' && skip === 0
         ? Array.from({ length: 100 }, (_, i) => fake(i + 1))
         : [];

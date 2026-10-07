@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { addonBuilder } from 'stremio-addon-sdk';
+import { addonBuilder, type Manifest } from 'stremio-addon-sdk';
 import { buildManifest, assertManifestFits, ADDON_ID, ADDON_NAME } from '../src/addon/manifest.js';
 
 const m = buildManifest('0.1.0');
@@ -16,7 +16,10 @@ describe('buildManifest', () => {
   });
 
   it('passes the SDK linter and handler-coverage check', () => {
-    expect(() => addonBuilder(m)).not.toThrow();
+    // Narrow cast at the SDK boundary: our manifest carries the Nuvio-required
+    // 'anime' type which the SDK's Manifest omits; the SDK passes it through
+    // untouched at runtime (see AniCataManifest in src/addon/manifest.ts).
+    expect(() => new addonBuilder(m as Manifest)).not.toThrow();
   });
 
   it('declares meta as an object resource with anilist: and kitsu: idPrefixes', () => {

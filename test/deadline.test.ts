@@ -71,12 +71,12 @@ describe('Deadline', () => {
     try {
       const d = new Deadline(60_000);
       await expect(d.run(async () => 'ok')).resolves.toBe('ok');
-      expectOwnTimerCleared(setSpy, clearSpy);
+      expectOwnTimerCleared();
       setSpy.mockClear();
       clearSpy.mockClear();
       const cause = new SourceError('network', 'boom');
       await expect(d.run(() => Promise.reject(cause))).rejects.toBe(cause);
-      expectOwnTimerCleared(setSpy, clearSpy);
+      expectOwnTimerCleared();
     } finally {
       setSpy.mockRestore();
       clearSpy.mockRestore();
