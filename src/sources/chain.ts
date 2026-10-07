@@ -55,7 +55,17 @@ export class SourceChain {
     stickyKey?: string,
   ): Promise<ChainResult> {
     void catalogId;
-    return this.execute(stickyKey, (source) => source.fetchPage(req));
+    return this.execute(stickyKey, (source, remainingMs) => {
+      // Rebuild rather than spread: the inbound req may carry a stale
+      // timeoutMs from a previous attempt, and the remaining budget is the
+      // only bound that matters for this attempt.
+      const attempt: PageRequest = { catalogId: req.catalogId, skip: req.skip, limit: req.limit };
+      if (req.genre !== undefined) {
+        attempt.genre = req.genre;
+      }
+      attempt.timeoutMs = remainingMs;
+      return source.fetchPage(attempt);
+    });
   }
 
   async search(
@@ -64,7 +74,9 @@ export class SourceChain {
     limit: number,
     stickyKey?: string,
   ): Promise<ChainResult> {
-    return this.execute(stickyKey, (source) => source.search(term, skip, limit));
+    return this.execute(stickyKey, (source, remainingMs) =>
+      source.search(term, skip, limit, remainingMs),
+    );
   }
 
   /**
@@ -75,7 +87,7 @@ export class SourceChain {
    */
   private async execute(
     stickyKey: string | undefined,
-    call: (source: AnimeSource) => Promise<SourcePage>,
+    call: (source: AnimeSource, remainingMs: number) => Promise<SourcePage>,
   ): Promise<ChainResult> {
     const deadline = new Deadline(this.budgetMs, this.now);
     let lastError: unknown;
@@ -91,7 +103,7 @@ export class SourceChain {
         continue;
       }
       try {
-        const page = await deadline.run(() => call(source));
+        const page = await deadline.run((remainingMs) => call(source, remainingMs));
         breaker?.recordSuccess();
         if (stickyKey !== undefined) {
           this.stick(stickyKey, source.id);
@@ -150,7 +162,7 @@ export class SourceChain {
     }
     const deadline = new Deadline(this.budgetMs, this.now);
     try {
-      const anime = await deadline.run(() => source.fetchById(numeric));
+      const anime = await deadline.run((remainingMs) => source.fetchById(numeric, remainingMs));
       breaker?.recordSuccess();
       return { anime, sourceId: source.id };
     } catch (err) {

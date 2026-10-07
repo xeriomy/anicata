@@ -74,7 +74,7 @@ describe('kitsu: meta resolution', () => {
     const { handler, anilistFetchById, kitsuFetchById } = setup();
     const res = await handler({ type: 'anime', id: 'kitsu:1' });
     expect(res.meta).toMatchObject({ id: 'kitsu:1', type: 'anime', name: 'Cowboy Bebop' });
-    expect(kitsuFetchById).toHaveBeenCalledWith(1);
+    expect(kitsuFetchById).toHaveBeenCalledWith(1, expect.any(Number));
     expect(anilistFetchById).toHaveBeenCalledTimes(0);
   });
 
@@ -82,14 +82,14 @@ describe('kitsu: meta resolution', () => {
     const { handler, anilistFetchById, kitsuFetchById } = setup();
     const res = await handler({ type: 'anime', id: 'anilist:21' });
     expect(res.meta).toMatchObject({ id: 'anilist:21', type: 'anime', name: 'ONE PIECE' });
-    expect(anilistFetchById).toHaveBeenCalledWith(21);
+    expect(anilistFetchById).toHaveBeenCalledWith(21, expect.any(Number));
     expect(kitsuFetchById).toHaveBeenCalledTimes(0);
   });
 
   it('an unknown kitsu: id returns null, not a throw', async () => {
     const { handler, kitsuFetchById } = setup();
     const res = await handler({ type: 'anime', id: 'kitsu:999999' });
-    expect(kitsuFetchById).toHaveBeenCalledWith(999999);
+    expect(kitsuFetchById).toHaveBeenCalledWith(999999, expect.any(Number));
     // Complete meta object, never a throw: id/type/name all non-blank.
     expect(res.meta.id.trim()).not.toBe('');
     expect(res.meta.type.trim()).not.toBe('');

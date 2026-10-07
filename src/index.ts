@@ -75,6 +75,21 @@ function toExtraRecord(
   return out;
 }
 
+// Nuvio's meta budget is 5000 ms (`MetaDetailsRepository.FETCH_TIMEOUT_MS`).
+// The chain must outlive one per-attempt HTTP timeout so a primary that dies
+// by timeout (not just a fast 5xx) still leaves room for Kitsu, while staying
+// under 5000 with headroom for serialisation and transit. Arithmetic:
+// budget = min(httpTimeoutMs + 500, 4500); httpTimeoutMs is clamped to <= 4000
+// (see config), so the default 3500 yields 4000 (1000 ms headroom) and the
+// max 4000 yields 4500 (500 ms headroom). A literal here would silently
+// ignore the operator's HTTP_TIMEOUT_MS.
+export const CHAIN_BUDGET_MARGIN_MS = 500;
+export const CHAIN_BUDGET_MAX_MS = 4500;
+
+export function chainBudgetForHttpTimeout(httpTimeoutMs: number): number {
+  return Math.min(httpTimeoutMs + CHAIN_BUDGET_MARGIN_MS, CHAIN_BUDGET_MAX_MS);
+}
+
 // The manifest route has no handler, so the SDK router emits no Cache-Control
 // for it. The manifest only changes on deploy: cache it for a day here. This
 // is deliberately per-route — a global serveHTTP cache would fight the
@@ -107,10 +122,11 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
       ['anilist', new CircuitBreaker()],
       ['kitsu', new CircuitBreaker()],
     ]),
-    // The chain's total budget follows the operator's configured timeout, which
-    // the config clamps to <= 4000 ms so a request stays inside Nuvio's
-    // 5000 ms meta budget. A literal here would silently ignore that setting.
-    budgetMs: config.httpTimeoutMs,
+    // The chain's total budget follows the operator's configured timeout (see
+    // chainBudgetForHttpTimeout above): one full per-attempt timeout plus a
+    // 500 ms fallback window, capped at 4500 ms. A literal here would silently
+    // ignore that setting.
+    budgetMs: chainBudgetForHttpTimeout(config.httpTimeoutMs),
   });
   const catalogService =
     overrides?.catalogService ?? new CatalogService({ source: overrides?.chain ?? chain, cache, log });

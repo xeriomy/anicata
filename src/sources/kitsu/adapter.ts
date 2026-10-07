@@ -214,19 +214,19 @@ export class KitsuSource implements AnimeSource {
     if (req.genre !== undefined) {
       params.genre = req.genre;
     }
-    const body = await this.get<KitsuListResponse>(buildPageUrl(params));
+    const body = await this.get<KitsuListResponse>(buildPageUrl(params), req.timeoutMs);
     return this.toPageResult(body);
   }
 
-  async search(term: string, skip: number, limit: number): Promise<SourcePage> {
-    const body = await this.get<KitsuListResponse>(buildSearchUrl(term, limit, skip));
+  async search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage> {
+    const body = await this.get<KitsuListResponse>(buildSearchUrl(term, limit, skip), timeoutMs);
     return this.toPageResult(body);
   }
 
-  async fetchById(kitsuId: number): Promise<Anime | null> {
+  async fetchById(kitsuId: number, timeoutMs?: number): Promise<Anime | null> {
     let body: KitsuSingleResponse;
     try {
-      body = await this.get<KitsuSingleResponse>(buildByIdUrl(kitsuId));
+      body = await this.get<KitsuSingleResponse>(buildByIdUrl(kitsuId), timeoutMs);
     } catch (err) {
       // Kitsu answers an unknown anime id with HTTP 404 (verified 2026-10-07:
       // {"errors":[{"title":"Record not found",...,"status":"404"}]}), and
@@ -255,13 +255,14 @@ export class KitsuSource implements AnimeSource {
     };
   }
 
-  private async get<T>(url: string): Promise<T> {
+  private async get<T>(url: string, timeoutMs?: number): Promise<T> {
     if (!this.limiter.tryAcquire()) {
       throw new SourceError('rate_limited', 'kitsu limiter empty');
     }
     this.log?.debug('kitsu request', { url });
     const res = await this.http.getJson<T>(url, {
       headers: { Accept: 'application/vnd.api+json' },
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
     return res.data;
   }

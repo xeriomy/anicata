@@ -201,6 +201,38 @@ describe('AniListSource.fetchById', () => {
   });
 });
 
+describe('AniListSource per-attempt timeout', () => {
+  // The chain threads its remaining budget into each attempt; the adapter must
+  // forward it to the HTTP call so a slow primary times out with room left for
+  // the fallback. The key is omitted (not undefined) when no bound arrives.
+  it('forwards timeoutMs to the HTTP call on fetchPage, search and fetchById', async () => {
+    const dPage = deps([page1]);
+    await new AniListSource(dPage).fetchPage({ catalogId: 'anime-trending', skip: 0, limit: 10, timeoutMs: 123 });
+    expect(
+      dPage._getJson.mock.calls[0]![1] as { method?: string; body?: unknown; timeoutMs?: number },
+    ).toMatchObject({ timeoutMs: 123 });
+
+    const dSearch = deps([load('./fixtures/catalog-search.json')]);
+    await new AniListSource(dSearch).search('cowboy bebop', 0, 50, 456);
+    expect(
+      dSearch._getJson.mock.calls[0]![1] as { method?: string; body?: unknown; timeoutMs?: number },
+    ).toMatchObject({ timeoutMs: 456 });
+
+    const dMeta = deps([{ data: { Media: load('./fixtures/meta-21.json').data.Media } }]);
+    await new AniListSource(dMeta).fetchById(21, 789);
+    expect(
+      dMeta._getJson.mock.calls[0]![1] as { method?: string; body?: unknown; timeoutMs?: number },
+    ).toMatchObject({ timeoutMs: 789 });
+  });
+
+  it('omits the timeoutMs key when the caller passes no bound', async () => {
+    const d = deps([page1]);
+    await new AniListSource(d).fetchPage({ catalogId: 'anime-trending', skip: 0, limit: 10 });
+    const init = d._getJson.mock.calls[0]![1] as Record<string, unknown> | undefined;
+    expect('timeoutMs' in (init ?? {})).toBe(false);
+  });
+});
+
 describe('catalog definitions', () => {
   it('declares exactly three Phase 1 catalogues, all type anime', () => {
     expect(Object.keys(CATALOG_DEFS).sort()).toEqual(['anime-search', 'anime-top-rated', 'anime-trending']);

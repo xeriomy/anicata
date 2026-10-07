@@ -102,6 +102,14 @@ export class CatalogService {
       // The serving source is only known after the fetch, so consult the cache
       // under the sticky-predicted source; on a cold key (or a misprediction)
       // fetch first, then store under the source that actually served.
+      //
+      // KNOWN LIMITATION (availability, not correctness): the cold path never
+      // consults the cache — there is no "try every source's key" lookup (that
+      // was considered and deliberately deferred). So after a container
+      // restart, or once the sticky entry lapses, both-sources-down plus a
+      // warm cache under the other source's key still yields degraded-empty
+      // rather than stale. The response is still HTTP 200; do not assume a
+      // warm cache implies a stale serve on this path.
       const predicted = this.source.peekSticky(stickyKey);
       if (predicted !== undefined) {
         const hit = this.cache.get<CachedPage>(catalogCacheKey(predicted, args.catalogId, genre, skip));

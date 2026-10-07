@@ -9,6 +9,7 @@ import type {
   SourcePage,
 } from '../src/sources/types.js';
 import { SourceChain } from '../src/sources/chain.js';
+import { chainBudgetForHttpTimeout } from '../src/index.js';
 
 function anime(n: number, source: SourceId): Anime {
   return {
@@ -35,19 +36,29 @@ const REQ: PageRequest = { catalogId: 'trending', skip: 0, limit: 20 };
 
 interface FakeSource extends AnimeSource {
   fetchPageMock: ReturnType<typeof vi.fn<(req: PageRequest) => Promise<SourcePage>>>;
-  searchMock: ReturnType<typeof vi.fn<(term: string, skip: number, limit: number) => Promise<SourcePage>>>;
-  fetchByIdMock: ReturnType<typeof vi.fn<(id: number) => Promise<Anime | null>>>;
+  searchMock: ReturnType<typeof vi.fn<(term: string, skip: number, limit: number, timeoutMs?: number) => Promise<SourcePage>>>;
+  fetchByIdMock: ReturnType<typeof vi.fn<(id: number, timeoutMs?: number) => Promise<Anime | null>>>;
 }
 
 function fakeSource(id: SourceId): FakeSource {
   const fetchPageMock = vi.fn<(req: PageRequest) => Promise<SourcePage>>();
-  const fetchByIdMock = vi.fn<(id: number) => Promise<Anime | null>>();
-  const searchMock = vi.fn<(term: string, skip: number, limit: number) => Promise<SourcePage>>();
+  const fetchByIdMock = vi.fn<(id: number, timeoutMs?: number) => Promise<Anime | null>>();
+  const searchMock = vi.fn<(term: string, skip: number, limit: number, timeoutMs?: number) => Promise<SourcePage>>();
   return {
     id,
     fetchPage: (req: PageRequest) => fetchPageMock(req),
-    search: (term: string, skip: number, limit: number) => searchMock(term, skip, limit),
-    fetchById: (num: number) => fetchByIdMock(num),
+    search: (term: string, skip: number, limit: number, timeoutMs?: number) => {
+      if (timeoutMs === undefined) {
+        return searchMock(term, skip, limit);
+      }
+      return searchMock(term, skip, limit, timeoutMs);
+    },
+    fetchById: (num: number, timeoutMs?: number) => {
+      if (timeoutMs === undefined) {
+        return fetchByIdMock(num);
+      }
+      return fetchByIdMock(num, timeoutMs);
+    },
     fetchPageMock,
     searchMock,
     fetchByIdMock,
@@ -345,7 +356,7 @@ describe('SourceChain.search', () => {
     expect(res.sourceId).toBe('anilist');
     expect(res.fromFallback).toBe(false);
     expect(res.items).toHaveLength(2);
-    expect(primary.searchMock).toHaveBeenCalledWith('bebop', 0, 20);
+    expect(primary.searchMock).toHaveBeenCalledWith('bebop', 0, 20, 4000);
     expect(fallback.searchMock).toHaveBeenCalledTimes(0);
   });
 
@@ -423,7 +434,7 @@ describe('SourceChain.fetchById', () => {
     const res = await chain.fetchById('anilist:21');
     expect(res.sourceId).toBe('anilist');
     expect(res.anime?.displayTitle).toBe('Title 21');
-    expect(primary.fetchByIdMock).toHaveBeenCalledWith(21);
+    expect(primary.fetchByIdMock).toHaveBeenCalledWith(21, 4000);
     expect(fallback.fetchByIdMock).toHaveBeenCalledTimes(0);
   });
 
@@ -433,7 +444,7 @@ describe('SourceChain.fetchById', () => {
     const res = await chain.fetchById('kitsu:1376');
     expect(res.sourceId).toBe('kitsu');
     expect(res.anime?.displayTitle).toBe('Title 1376');
-    expect(fallback.fetchByIdMock).toHaveBeenCalledWith(1376);
+    expect(fallback.fetchByIdMock).toHaveBeenCalledWith(1376, 4000);
     expect(primary.fetchByIdMock).toHaveBeenCalledTimes(0);
   });
 
@@ -480,5 +491,121 @@ describe('SourceChain.fetchById', () => {
     const err = await chain.fetchById('anilist:21').catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SourceError);
     expect(primary.fetchByIdMock).toHaveBeenCalledTimes(0);
+  });
+});
+
+describe('SourceChain slow-timeout fallback', () => {
+  // Finding 1 regression: the primary dies by TIMEOUT (not an instant throw),
+  // consuming its whole per-attempt window, and the fallback must still serve
+  // with the total inside the chain budget. With budget == per-attempt timeout
+  // (the old equality) the chain gives up here and this test fails.
+  const PRIMARY_TIMEOUT_MS = 200;
+  const BUDGET_MS = 400;
+
+  function timeoutPrimary(): {
+    fetchPage: (req: PageRequest) => Promise<SourcePage>;
+    search: (term: string, skip: number, limit: number, timeoutMs?: number) => Promise<SourcePage>;
+    fetchById: (id: number, timeoutMs?: number) => Promise<Anime | null>;
+  } {
+    const slowDeath = (): Promise<never> =>
+      new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new SourceError('timeout', `timed out after ${PRIMARY_TIMEOUT_MS}ms`)),
+          PRIMARY_TIMEOUT_MS,
+        );
+      });
+    return {
+      fetchPage: () => slowDeath(),
+      search: () => slowDeath(),
+      fetchById: () => slowDeath(),
+    };
+  }
+
+  function chainOver(primary: AnimeSource): { chain: SourceChain; fallback: FakeSource } {
+    const fallback = fakeSource('kitsu');
+    const chain = new SourceChain({
+      sources: [primary, fallback],
+      breakers: breakers(Date.now, 5),
+      budgetMs: BUDGET_MS,
+      now: Date.now,
+    });
+    return { chain, fallback };
+  }
+
+  it('a primary that times out still falls through to Kitsu inside the budget', async () => {
+    const slow = timeoutPrimary();
+    const seenPrimary: PageRequest[] = [];
+    const primary: AnimeSource = {
+      id: 'anilist',
+      fetchPage: (req: PageRequest) => {
+        seenPrimary.push(req);
+        return slow.fetchPage(req);
+      },
+      ...{ search: slow.search, fetchById: slow.fetchById },
+    };
+    const { chain, fallback } = chainOver(primary);
+    fallback.fetchPageMock.mockResolvedValue(page([9], 'kitsu', 1));
+    const started = Date.now();
+    const res = await chain.fetchPage('trending', REQ);
+    const elapsed = Date.now() - started;
+    expect(res.sourceId).toBe('kitsu');
+    expect(res.fromFallback).toBe(true);
+    expect(res.items).toHaveLength(1);
+    expect(fallback.fetchPageMock).toHaveBeenCalledTimes(1);
+    expect(elapsed).toBeLessThan(BUDGET_MS);
+    // The chain threaded the remaining budget into each attempt: the primary
+    // got the full budget and the fallback got what was left after the
+    // primary's 200 ms timeout death.
+    expect(seenPrimary).toHaveLength(1);
+    expect(seenPrimary[0]?.timeoutMs).toBe(BUDGET_MS);
+    const fallbackTimeout = fallback.fetchPageMock.mock.calls[0]?.[0]?.timeoutMs;
+    expect(typeof fallbackTimeout).toBe('number');
+    expect(fallbackTimeout as number).toBeGreaterThan(0);
+    expect(fallbackTimeout as number).toBeLessThan(BUDGET_MS);
+  });
+
+  it('search threads the remaining budget to each attempt', async () => {
+    const slow = timeoutPrimary();
+    const primary: AnimeSource = { id: 'anilist', ...slow };
+    const { chain, fallback } = chainOver(primary);
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    const res = await chain.search('bebop', 0, 20);
+    expect(res.sourceId).toBe('kitsu');
+    const seen = fallback.searchMock.mock.calls[0]?.[3];
+    expect(typeof seen).toBe('number');
+    expect(seen as number).toBeGreaterThan(0);
+    expect(seen as number).toBeLessThan(BUDGET_MS);
+  });
+
+  it('fetchPage threads the remaining budget to each attempt', async () => {
+    const { chain, primary, fallback } = setup({ budgetMs: 4000 });
+    primary.fetchPageMock.mockResolvedValue(page([1], 'anilist', 1));
+    await chain.fetchPage('trending', REQ);
+    // Untouched by wall-clock time on the injected clock: the full budget.
+    expect(primary.fetchPageMock.mock.calls[0]?.[0]?.timeoutMs).toBe(4000);
+    expect(fallback.fetchPageMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('fetchById threads the remaining budget to the routed source', async () => {
+    const { chain, primary } = setup({ budgetMs: 4000 });
+    primary.fetchByIdMock.mockResolvedValue(anime(21, 'anilist'));
+    await chain.fetchById('anilist:21');
+    expect(primary.fetchByIdMock.mock.calls[0]?.[1]).toBe(4000);
+  });
+});
+
+describe('chainBudgetForHttpTimeout', () => {
+  it('adds one fallback window and caps below Nuvio 5000 ms budget', () => {
+    // Default 3500 -> 4000 (1000 ms headroom); max 4000 -> 4500 (500 ms headroom).
+    expect(chainBudgetForHttpTimeout(3500)).toBe(4000);
+    expect(chainBudgetForHttpTimeout(4000)).toBe(4500);
+    // An operator value above the config clamp still never reaches 5000.
+    expect(chainBudgetForHttpTimeout(10000)).toBe(4500);
+    // Strictly exceeds the per-attempt timeout, so a timeout death leaves room.
+    for (const httpTimeoutMs of [100, 1000, 3500, 4000]) {
+      const budget = chainBudgetForHttpTimeout(httpTimeoutMs);
+      expect(budget).toBeGreaterThan(httpTimeoutMs);
+      expect(budget).toBeLessThan(5000);
+    }
   });
 });

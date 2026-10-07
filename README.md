@@ -88,10 +88,18 @@ Every id this add-on emits looks like `anilist:21` (see `stremioIdFor` in
 
 One ordered chain, built in `src/index.ts`: `SourceChain([anilist, kitsu])`
 with one `CircuitBreaker` per source and a shared `budgetMs` derived from
-`HTTP_TIMEOUT_MS` (clamped ≤ 4000 ms, inside Nuvio's 5000 ms meta budget).
+`HTTP_TIMEOUT_MS` (clamped ≤ 4000 ms): `min(httpTimeoutMs + 500, 4500)`, which
+stays inside Nuvio's 5000 ms meta budget with 500–1000 ms of headroom for
+serialisation and transit.
 
-- A throwing/slow AniList falls through to Kitsu; `429`/`404`/`invalid_request`
-  never fall through (the source answered, so it is healthy — `permitsFallback`
+- A throwing AniList falls through to Kitsu, as does one that dies by HTTP
+  timeout: the chain budget strictly exceeds the per-attempt timeout, and each
+  attempt is bounded by the deadline's remaining budget (threaded through
+  `PageRequest.timeoutMs` into the adapters' HTTP calls), so a timeout death
+  leaves ~500 ms for the fallback. A source that hangs forever with no inner
+  timeout still exhausts the shared deadline and degrades to empty — still
+  HTTP 200. `429`/`404`/`invalid_request` never fall through (the source
+  answered, so it is healthy — `permitsFallback`
   in `src/sources/fallback-policy.ts`).
 - **Trending degrades to most-favorited during an AniList outage, and that is a
   deliberate approximation, not an exact mapping.** Kitsu has no trending sort:
@@ -181,7 +189,7 @@ share one upstream request. HTTP responses also carry `Cache-Control`
 | Meta cache | `meta:{anilist\|kitsu}:{id}` | **7 d** | **30 d** | ✅ implemented |
 | Negative meta cache | `meta:{anilist\|kitsu}:{id}` → `null` | 60 s | — | ✅ implemented |
 | Identity cache (`resolve:{ns}:{value}`, 30 d) | — | — | — | ❌ designed, lands Phase 3 |
-| Raw-source cache (upstream URL, 10 min) | — | — | — | ❌ designed, lands Phase 2 |
+| Raw-source cache (upstream URL, 10 min) | — | — | — | ❌ designed, unplanned (deferred; no phase assigned) |
 
 Response `cacheMaxAge` values (numeric `max-age` on the wire, from the services
 and `src/index.ts`):

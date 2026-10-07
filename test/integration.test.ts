@@ -287,7 +287,7 @@ describe('fallback chain wiring (Phase 2)', () => {
     expect(dead.body.meta.name).toBe('Unavailable');
   });
 
-  it('a hanging primary still answers inside httpTimeoutMs via the deadline', async () => {
+  it('a hanging primary still answers inside the chain budget via the deadline', async () => {
     // No sleeps: the primaries below either throw after a delay or never
     // settle, so completion within the bound proves the chain's deadline
     // fired. The bound is asserted against the configured httpTimeoutMs
@@ -298,8 +298,9 @@ describe('fallback chain wiring (Phase 2)', () => {
     // only the REMAINING budget, never a fresh one. A primary that never
     // settles therefore consumes the whole budget and the fallback is never
     // attempted — the answer is a fast degraded-empty 200, not fallback
-    // content. (In production the HttpClient timeout fires first at
-    // httpTimeoutMs < budgetMs, leaving room for the fallback; a bare
+    // content. (In production the per-attempt HTTP timeout fires first: the
+    // chain budget is httpTimeoutMs + 500 ms capped at 4500 ms, so a primary
+    // that dies by timeout leaves ~500 ms for the fallback; a bare
     // never-settling fake has no such inner timeout.) Both shapes are
     // asserted: slow-then-throwing serves fallback content, never-settling
     // serves degraded-empty — but both are 200 inside the bound.

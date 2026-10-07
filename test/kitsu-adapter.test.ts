@@ -227,3 +227,35 @@ describe('KitsuSource.fetchById', () => {
     expect(renderPreview(a!).id).toBe('kitsu:1');
   });
 });
+
+describe('KitsuSource per-attempt timeout', () => {
+  // The chain threads its remaining budget into each attempt; the adapter must
+  // forward it to the HTTP call so the fallback attempt is itself bounded. The
+  // key is omitted (not undefined) when no bound arrives.
+  it('forwards timeoutMs to the HTTP call on fetchPage, search and fetchById', async () => {
+    const dPage = deps([pageFixture]);
+    await new KitsuSource(dPage).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 3, timeoutMs: 123 });
+    expect(
+      dPage._getJson.mock.calls[0]![1] as { headers?: Record<string, string>; timeoutMs?: number },
+    ).toMatchObject({ timeoutMs: 123 });
+
+    const dSearch = deps([pageFixture]);
+    await new KitsuSource(dSearch).search('cowboy bebop', 0, 3, 456);
+    expect(
+      dSearch._getJson.mock.calls[0]![1] as { headers?: Record<string, string>; timeoutMs?: number },
+    ).toMatchObject({ timeoutMs: 456 });
+
+    const dMeta = deps([anime1Fixture]);
+    await new KitsuSource(dMeta).fetchById(1, 789);
+    expect(
+      dMeta._getJson.mock.calls[0]![1] as { headers?: Record<string, string>; timeoutMs?: number },
+    ).toMatchObject({ timeoutMs: 789 });
+  });
+
+  it('omits the timeoutMs key when the caller passes no bound', async () => {
+    const d = deps([pageFixture]);
+    await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 3 });
+    const init = d._getJson.mock.calls[0]![1] as Record<string, unknown> | undefined;
+    expect('timeoutMs' in (init ?? {})).toBe(false);
+  });
+});

@@ -93,7 +93,7 @@ export class AniListSource implements AnimeSource {
       if (req.genre !== undefined) {
         variables.genre = req.genre;
       }
-      const body = await this.post<CatalogResponse>(CATALOG_QUERY, variables);
+      const body = await this.post<CatalogResponse>(CATALOG_QUERY, variables, req.timeoutMs);
       const res = this.toPageResult(body);
       total = res.total;
       collected.push(...(offset > 0 ? res.items.slice(offset) : res.items));
@@ -106,7 +106,7 @@ export class AniListSource implements AnimeSource {
     return { items: collected.slice(0, req.limit), total };
   }
 
-  async search(term: string, skip: number, limit: number): Promise<SourcePage> {
+  async search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage> {
     const page = Math.floor(skip / ANILIST_PER_PAGE) + 1;
     const offset = skip % ANILIST_PER_PAGE;
     const body = await this.post<CatalogResponse>(SEARCH_QUERY, {
@@ -114,17 +114,18 @@ export class AniListSource implements AnimeSource {
       perPage: ANILIST_PER_PAGE,
       page,
       sort: sortForKey('search_match'),
-    });
+    }, timeoutMs);
     const res = this.toPageResult(body);
     return { items: res.items.slice(offset, offset + limit), total: res.total };
   }
 
-  async fetchById(anilistId: number): Promise<Anime | null> {
+  async fetchById(anilistId: number, timeoutMs?: number): Promise<Anime | null> {
     let body: AniListGraphQLResponse<{ Media: AniListMedia | null }>;
     try {
       body = await this.post<AniListGraphQLResponse<{ Media: AniListMedia | null }>>(
         META_QUERY,
         { id: anilistId },
+        timeoutMs,
       );
     } catch (err) {
       // AniList answers an unknown Media id with HTTP 404 (not HTTP 200 with
@@ -192,7 +193,7 @@ export class AniListSource implements AnimeSource {
     };
   }
 
-  private async post<T>(query: string, variables: Record<string, unknown>): Promise<T> {
+  private async post<T>(query: string, variables: Record<string, unknown>, timeoutMs?: number): Promise<T> {
     if (!this.limiter.tryAcquire()) {
       throw new SourceError('rate_limited', 'anilist limiter empty');
     }
@@ -201,6 +202,7 @@ export class AniListSource implements AnimeSource {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),
+      ...(timeoutMs !== undefined ? { timeoutMs } : {}),
     });
     return res.data;
   }
