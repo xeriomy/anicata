@@ -3,7 +3,7 @@ import { SourceError } from '../domain/errors.js';
 import type { CircuitBreaker } from '../net/breaker.js';
 import { Deadline } from '../net/deadline.js';
 import { permitsFallback } from './fallback-policy.js';
-import type { AnimeSource, PageRequest, SourceId } from './types.js';
+import type { AnimeSource, PageRequest, SourceId, SourcePage } from './types.js';
 
 export interface ChainDeps {
   sources: AnimeSource[]; // ordered; index 0 is primary
@@ -55,6 +55,28 @@ export class SourceChain {
     stickyKey?: string,
   ): Promise<ChainResult> {
     void catalogId;
+    return this.execute(stickyKey, (source) => source.fetchPage(req));
+  }
+
+  async search(
+    term: string,
+    skip: number,
+    limit: number,
+    stickyKey?: string,
+  ): Promise<ChainResult> {
+    return this.execute(stickyKey, (source) => source.search(term, skip, limit));
+  }
+
+  /**
+   * One walk for every source-agnostic call: honour the sticky source if set
+   * and its breaker is closed, otherwise walk `sources` in order, skipping any
+   * whose breaker is open, giving each only the remaining budget. Shared so
+   * `fetchPage` and `search` cannot drift.
+   */
+  private async execute(
+    stickyKey: string | undefined,
+    call: (source: AnimeSource) => Promise<SourcePage>,
+  ): Promise<ChainResult> {
     const deadline = new Deadline(this.budgetMs, this.now);
     let lastError: unknown;
     for (const source of this.orderFor(stickyKey)) {
@@ -69,7 +91,7 @@ export class SourceChain {
         continue;
       }
       try {
-        const page = await deadline.run(() => source.fetchPage(req));
+        const page = await deadline.run(() => call(source));
         breaker?.recordSuccess();
         if (stickyKey !== undefined) {
           this.stick(stickyKey, source.id);

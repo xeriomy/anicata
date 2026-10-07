@@ -35,6 +35,7 @@ const REQ: PageRequest = { catalogId: 'trending', skip: 0, limit: 20 };
 
 interface FakeSource extends AnimeSource {
   fetchPageMock: ReturnType<typeof vi.fn<(req: PageRequest) => Promise<SourcePage>>>;
+  searchMock: ReturnType<typeof vi.fn<(term: string, skip: number, limit: number) => Promise<SourcePage>>>;
   fetchByIdMock: ReturnType<typeof vi.fn<(id: number) => Promise<Anime | null>>>;
 }
 
@@ -48,6 +49,7 @@ function fakeSource(id: SourceId): FakeSource {
     search: (term: string, skip: number, limit: number) => searchMock(term, skip, limit),
     fetchById: (num: number) => fetchByIdMock(num),
     fetchPageMock,
+    searchMock,
     fetchByIdMock,
   };
 }
@@ -332,6 +334,85 @@ describe('SourceChain stickiness', () => {
     const res = await chain.fetchPage('trending', REQ, 'trending:Action');
     expect(res.sourceId).toBe('anilist');
     expect(primary.fetchPageMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('SourceChain.search', () => {
+  it('primary healthy → fromFallback false, zero fallback calls', async () => {
+    const { chain, primary, fallback } = setup();
+    primary.searchMock.mockResolvedValue(page([1, 2], 'anilist', 2));
+    const res = await chain.search('bebop', 0, 20);
+    expect(res.sourceId).toBe('anilist');
+    expect(res.fromFallback).toBe(false);
+    expect(res.items).toHaveLength(2);
+    expect(primary.searchMock).toHaveBeenCalledWith('bebop', 0, 20);
+    expect(fallback.searchMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('primary 5xx → fallback serves, fromFallback true', async () => {
+    const { chain, primary, fallback } = setup();
+    primary.searchMock.mockRejectedValue(new SourceError('server_error', 'boom'));
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    const res = await chain.search('bebop', 0, 20);
+    expect(res.sourceId).toBe('kitsu');
+    expect(res.fromFallback).toBe(true);
+    expect(primary.searchMock).toHaveBeenCalledTimes(1);
+    expect(fallback.searchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('primary 429 → throws the rate_limited error, fallback spy shows 0 calls', async () => {
+    const { chain, primary, fallback } = setup();
+    const cause = new SourceError('rate_limited', 'slow down');
+    primary.searchMock.mockRejectedValue(cause);
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    await expect(chain.search('bebop', 0, 20)).rejects.toBe(cause);
+    expect(fallback.searchMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('primary 404 → 0 fallback calls, error propagates', async () => {
+    const { chain, primary, fallback } = setup();
+    const cause = new SourceError('not_found', 'no such page');
+    primary.searchMock.mockRejectedValue(cause);
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    await expect(chain.search('bebop', 0, 20)).rejects.toBe(cause);
+    expect(fallback.searchMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('open breaker on the primary → zero network calls to the primary', async () => {
+    const { chain, primary, fallback, breakerMap } = setup({ threshold: 1 });
+    breakerMap.get('anilist')?.recordFailure();
+    expect(breakerMap.get('anilist')?.canAttempt()).toBe(false);
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    const res = await chain.search('bebop', 0, 20);
+    expect(res.sourceId).toBe('kitsu');
+    expect(res.fromFallback).toBe(true);
+    expect(primary.searchMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('a slow primary cannot push the total past budgetMs (injected clock)', async () => {
+    const { chain, primary, fallback, advance } = setup({ budgetMs: 4000 });
+    const cause = new SourceError('server_error', 'slow then down');
+    primary.searchMock.mockImplementation(() => {
+      advance(5000);
+      return Promise.reject(cause);
+    });
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    await expect(chain.search('bebop', 0, 20)).rejects.toBe(cause);
+    expect(fallback.searchMock).toHaveBeenCalledTimes(0);
+  });
+
+  it('a sticky key returns the same source for a second call within the TTL', async () => {
+    const { chain, primary, fallback } = setup({ stickyTtlMs: 1000 });
+    primary.searchMock.mockRejectedValue(new SourceError('server_error', 'down'));
+    fallback.searchMock.mockResolvedValue(page([9], 'kitsu', 1));
+    const first = await chain.search('bebop', 0, 20, 'search:bebop');
+    expect(first.sourceId).toBe('kitsu');
+    expect(chain.peekSticky('search:bebop')).toBe('kitsu');
+    const second = await chain.search('bebop', 20, 20, 'search:bebop');
+    expect(second.sourceId).toBe('kitsu');
+    // The primary is skipped outright on the second call: still one call.
+    expect(primary.searchMock).toHaveBeenCalledTimes(1);
+    expect(fallback.searchMock).toHaveBeenCalledTimes(2);
   });
 });
 
