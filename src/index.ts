@@ -80,9 +80,19 @@ function toExtraRecord(
 // by timeout (not just a fast 5xx) still leaves room for Kitsu, while staying
 // under 5000 with headroom for serialisation and transit. Arithmetic:
 // budget = min(httpTimeoutMs + 500, 4500); httpTimeoutMs is clamped to <= 4000
-// (see config), so the default 3500 yields 4000 (1000 ms headroom) and the
-// max 4000 yields 4500 (500 ms headroom). A literal here would silently
-// ignore the operator's HTTP_TIMEOUT_MS.
+// (see config), so the default 3500 yields 4000 and the max 4000 yields 4500.
+// Headroom for the fallback attempt is therefore 500 ms at both ends.
+//
+// That 500 ms is enough for a SLOW-but-responding AniList: at a typical ~1000 ms
+// the fallback gets ~3000 ms, and at 3000 ms it still gets ~1000 ms. It is tight
+// only when AniList is fully hung and burns its whole timeout, where Kitsu's
+// ~600 ms p50 may not fit. That case still returns HTTP 200 with an empty list
+// inside Nuvio's budget, which is the correct degradation - but a larger
+// fallback window would need a smaller per-attempt timeout, and Nuvio's 5000 ms
+// cap is what forces the ceiling at 4500. Changing that trade is a deliberate
+// decision, not a bug fix.
+//
+// A literal here would silently ignore the operator's HTTP_TIMEOUT_MS.
 export const CHAIN_BUDGET_MARGIN_MS = 500;
 export const CHAIN_BUDGET_MAX_MS = 4500;
 
