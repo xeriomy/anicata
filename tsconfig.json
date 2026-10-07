@@ -5,11 +5,12 @@
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
     "outDir": "dist",
+    "rootDir": "src",
     "declaration": false,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test"]
+  "include": ["src"]
 }
