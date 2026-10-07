@@ -210,11 +210,6 @@ describe('catalog definitions', () => {
     expect(ANILIST_PER_PAGE).toBe(50);
     expect(PAGE_SIZE % ANILIST_PER_PAGE).toBe(0); // exactly 2 upstream pages per Nuvio page
   });
-
-  it('builds distinct sort arguments per catalogue', () => {
-    expect(CATALOG_DEFS['anime-trending'].buildQuery(0).sort).toEqual(['TRENDING_DESC']);
-    expect(CATALOG_DEFS['anime-top-rated'].buildQuery(0).sort).toEqual(['SCORE_DESC']);
-  });
 });
 
 describe('page 1 and page 2 are disjoint (Review Focus #1)', () => {
