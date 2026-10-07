@@ -6,10 +6,9 @@ export type AnimeStatus =
 
 export type Season = 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL';
 
-export interface AnimeIdentity {
-  anilist: number;
-  mal?: number;
-}
+export type AnimeIdentity =
+  | { anilist: number; kitsu?: never; mal?: number }
+  | { kitsu: number; anilist?: never; mal?: number };
 
 export interface AnimeTitle {
   romaji?: string;
@@ -76,5 +75,8 @@ export interface Anime {
 }
 
 export function stremioIdFor(identity: AnimeIdentity): string {
-  return `anilist:${identity.anilist}`;
+  if (identity.anilist !== undefined) {
+    return `anilist:${identity.anilist}`;
+  }
+  return `kitsu:${identity.kitsu}`;
 }

@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { KitsuSource, kitsuSort } from '../src/sources/kitsu/adapter.js';
 import type { AnimeSource } from '../src/sources/types.js';
 import { SourceError } from '../src/domain/errors.js';
+import { renderPreview } from '../src/render/preview.js';
 
 const load = (p: string) => JSON.parse(readFileSync(new URL(p, import.meta.url), 'utf8'));
 
@@ -207,5 +208,14 @@ describe('KitsuSource.fetchById', () => {
     // surfaces as 400 and must remain an error, not a missing title.
     const d = deps([new SourceError('invalid_request', 'GET https://kitsu.io/api/edge/anime failed with status 400', 400)]);
     await expect(new KitsuSource(d).fetchById(1)).rejects.toMatchObject({ kind: 'invalid_request', status: 400 });
+  });
+
+  it('renders under the kitsu: namespace, never anilist:', async () => {
+    // A Kitsu id published as `anilist:<id>` points at a different show on
+    // AniList (the namespaces collide), so the meta link and artwork would
+    // describe two different titles. This assertion would have caught that.
+    const d = deps([anime1Fixture]);
+    const a = await new KitsuSource(d).fetchById(1);
+    expect(renderPreview(a!).id).toBe('kitsu:1');
   });
 });

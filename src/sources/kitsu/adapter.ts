@@ -159,13 +159,10 @@ export function normalizeKitsuAnime(
   const poster = pickImage(attrs.posterImage);
   const background = pickImage(attrs.coverImage);
 
-  // Kitsu exposes no AniList id (that mapping lives in its `mappings`
-  // relationship, which this adapter does not fetch), and `AnimeIdentity`
-  // requires a numeric `anilist` id. The Kitsu numeric id is the only id
-  // available, so it fills that field; namespacing Kitsu ids downstream is
-  // the fallback chain's concern, not this adapter's.
+  // Kitsu titles publish under the `kitsu:` namespace: Kitsu and AniList ids
+  // collide, so a Kitsu id must never be served as `anilist:<id>`.
   return {
-    identity: { anilist: numericId },
+    identity: { kitsu: numericId },
     title,
     displayTitle,
     ...(description !== undefined ? { description } : {}),
