@@ -4,7 +4,7 @@
 
 **Goal:** When AniList fails, users still get catalogue and metadata from Kitsu, inside Nuvio's 5-second budget, with no path that returns a non-200.
 
-**Architecture:** Phase 1's `AnimeSource` port leaks AniList — it takes an `AniListPageQuery` whose `sort: string[]` is AniList's `MediaSort` enum, and `CatalogService` does AniList-specific page stitching against `ANILIST_PER_PAGE`. Task 1 replaces that with a source-agnostic port taking `{ catalogId, skip, limit }`, and moves page math into each adapter. Tasks 2–3 add the Kitsu adapter and prove both adapters satisfy one contract suite. Task 4 adds the circuit breaker. Task 5 adds `SourceChain`, which owns source selection, the shared 4000 ms deadline, and the fallback-eligibility rule. Tasks 6–7 add the deadline and the chain itself. Tasks 8–10 migrate caching to source-namespaced keys with a sticky source, implement Kitsu meta resolution (Phase 1 returns `"Unavailable"` for `kitsu:` ids), and rewire the composition root.
+**Architecture:** Phase 1's `AnimeSource` port leaks AniList — it takes an `AniListPageQuery` whose `sort: string[]` is AniList's `MediaSort` enum, and `CatalogService` does AniList-specific page stitching against `ANILIST_PER_PAGE`. Task 1 replaces that with a source-agnostic port taking `{ catalogId, skip, limit }`, and moves page math into each adapter. Tasks 2–3 add the Kitsu adapter and prove both adapters satisfy one contract suite. Task 4 adds the circuit breaker. Task 5 adds `SourceChain`, which owns source selection, the shared 4000 ms deadline, and the fallback-eligibility rule. Tasks 6–7 add the deadline and the chain itself. Tasks 8 and 9 point each service at the chain — which is also what makes source-namespaced cache keys possible, since only `ChainResult` reports the chosen source — and Task 10 assembles the composition root.
 
 **Tech Stack:** TypeScript 5.x (strict, `exactOptionalPropertyTypes`, `noUncheckedIndexedAccess`), Node 22, Vitest, ESLint 9 flat config, `stremio-addon-sdk` + `@types/stremio-addon-sdk@1.6.12`. No new runtime dependencies — Kitsu is called through the existing `HttpClient`.
 
@@ -442,18 +442,25 @@ attempt, and whether a failure permits one at all."
 ### Task 8: Source-namespaced cache keys
 
 **Files:**
-- Modify: `src/services/catalog.service.ts:59,84,106,109`
+- Modify: `src/services/catalog.service.ts` (the `source` dependency, the cache keys at the two `catalog:`/`search:` call sites)
 - Test: `test/catalog-cache-keys.test.ts`
 
 **Interfaces:**
-- Consumes: `ChainResult.sourceId` from `SourceChain`.
+- Consumes: `SourceChain` from `src/sources/chain.js` — `fetchPage` returning `ChainResult`, whose `sourceId` is the only place the chosen source is reported. `AnimeSource` is no longer this service's dependency.
 - Produces: `export function catalogCacheKey(sourceId: SourceId, catalogId: string, genre: string | undefined, skip: number): string` and `export function searchCacheKey(sourceId: SourceId, term: string, skip: number): string`, both producing the shape `catalog:<sourceId>:<catalogId>:<genre>:<skip>` / `search:<sourceId>:<term>:<skip>`.
+
+**Why this task also wires the service.** The key must be built from the source that
+actually served the page, and only `ChainResult` carries that. So this task changes
+`CatalogService`'s dependency from `AnimeSource` to `SourceChain` — keying on
+`AnimeSource.id` instead would work while a single source is wired, but once the chain is
+the dependency there is no single `id`, because the chosen source varies per call. Task 10
+then wires only the composition root.
 
 - [ ] **Step 1: Write the failing test** — a Kitsu-sourced page and an AniList-sourced page at the same `(catalogId, skip)` occupy **different** keys; the same source is stable across calls; a genre and a different `skip` still separate; `search` keys are namespaced too.
 
 - [ ] **Step 2: Run to verify it fails** — the current key is `catalog:${catalogId}:${genre}:${skip}`, so the two sources collide. Expect FAIL.
 
-- [ ] **Step 3: Implement** the two key builders and route both call sites through them.
+- [ ] **Step 3: Change `CatalogService`'s dependency to `SourceChain` and route both cache-key call sites through the new builders**, passing `result.sourceId`. The loader's return value must carry `sourceId` out to the key-building site — if the cache stores only `{ items, total }`, the source is lost by the time the key is needed, so store it alongside.
 
 - [ ] **Step 4: Prove the collision is real, not theoretical** — before the fix, assert that a Kitsu page overwrites an AniList page at the same key. If it does not, the key function is not the only thing that changed and the test is not proving what it claims.
 
@@ -480,8 +487,8 @@ Phase 1 returns `"Unavailable"` for `kitsu:` ids on purpose. Without this, a fal
 - Test: `test/meta-kitsu.test.ts`
 
 **Interfaces:**
-- Consumes: `parseMetaId` (existing) returning `{ namespace, value }`; `SourceChain.fetchById`.
-- Produces: `MetaService` gains `source: AnimeSource`-shaped `fetchById(id: string)`, routing `anilist:<id>` and `kitsu:<id>` to the chain.
+- Consumes: `parseMetaId` (existing) returning `{ namespace, value }`; `SourceChain.fetchById(id: string)` from `src/sources/chain.js`.
+- Produces: `MetaService`'s `source` dependency becomes `SourceChain`, so routing on the namespace is the chain's job rather than the service's. `MetaService` passes the full namespaced id through unchanged.
 
 - [ ] **Step 1: Write the failing test** — `kitsu:1` resolves a full `Anime` via Kitsu and makes **zero AniList calls**; `anilist:1` makes **zero Kitsu calls**; an unknown `kitsu:` id returns `null` and not a throw; the minimal `"Unavailable"` shape still carries non-blank `id`, `type`, `name` for both namespaces; a bare numeric id is still rejected (it is a Trakt id).
 
@@ -507,18 +514,18 @@ pages. Routes by namespace; zero cross-source calls."
 ### Task 10: Composition root and integration
 
 **Files:**
-- Modify: `src/index.ts:77-117`
+- Modify: `src/index.ts` (composition root wiring only)
 - Test: `test/integration.test.ts`
 
 **Interfaces:**
-- Consumes: `KitsuSource`, `SourceChain`, `CircuitBreaker`, `loadAppConfig`.
+- Consumes: `KitsuSource`, `SourceChain`, `CircuitBreaker`, `loadAppConfig`. Both services already depend on `SourceChain` (Tasks 8 and 9) — this task only assembles them.
 - Produces: `createApp(overrides?: Partial<AppDeps>)` unchanged in shape; `AppDeps` gains an optional `chain` for injection.
 
 - [ ] **Step 1: Write the failing test** — the existing suite plus: the app boots with both sources wired; a primary that always throws still yields **200** on every catalogue, search and meta path (the Phase 1 invariant, now under fallback); `/manifest.json` is unchanged and still ≤ 8192 bytes; **every response still arrives inside 4000 ms** when the primary hangs.
 
 - [ ] **Step 2: Run to verify it fails** → the new cases fail; the old ones pass.
 
-- [ ] **Step 3: Wire it** — construct `KitsuSource`, one `CircuitBreaker` per `SourceId`, and `SourceChain([anilist, kitsu], breakers)`, then pass the chain where services previously took a bare source. `budgetMs` comes from `httpTimeoutMs` so the existing config clamp keeps protecting Nuvio's budget.
+- [ ] **Step 3: Wire the root** — construct `KitsuSource`, one `CircuitBreaker` per `SourceId`, and `SourceChain([anilist, kitsu], breakers)`, then pass that chain into `CatalogService` and `MetaService`, which already accept it. `budgetMs` comes from `httpTimeoutMs` so the existing config clamp keeps protecting Nuvio's budget.
 
 - [ ] **Step 4: Run the whole suite offline** — `unshare -n -- npm test` must pass, proving the added fallback path introduces no network dependency.
 
