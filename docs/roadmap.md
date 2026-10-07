@@ -114,10 +114,14 @@ disk cache, deployment config.
       `test/catalog-service.test.ts` "serves stale from the cache when the
       source throws" (stale served on failure; the service path is
       error-kind-agnostic once a stale entry exists).
-- [ ] AniList + Kitsu down → stale (up to 24 h), never 5xx — OPEN: never-5xx
-      is proven (integration "never returns a non-200" with both services
-      throwing, plus the throwing-chain test), but the catalogue stale window
-      in code is 6 h (`CATALOG_STALE_MS`), not the 24 h this gate text claims.
+- [ ] AniList + Kitsu down → stale (up to **6 h**), never 5xx — duration claim
+      CORRECTED 2026-10-07: this gate originally said 24 h, which was wrong. 24 h is the
+      manifest cache (`manifest 86 400`); the catalogue stale window is 6 h
+      (`CATALOG_STALE_MS = 6 * 60 * 60 * 1000`). Left unticked because never-5xx is proven
+      (integration "never returns a non-200" with both services throwing, plus the
+      throwing-chain test) and stale-on-failure is proven at service level, but no single test
+      demonstrates the full composition — both sources down, a stale entry present, HTTP 200 —
+      which is what this gate actually asks for.
 - [x] Empty result → **zero** fallback calls ✅ proven 2026-10-07:
       `test/chain.test.ts` "primary returns empty → success, 0 fallback calls".
 - [ ] Every adapter maps to identical `Anime` for equivalent input (snapshot) —
