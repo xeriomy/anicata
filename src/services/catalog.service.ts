@@ -54,6 +54,19 @@ function coerceSkip(skip: number): number {
   return Math.floor(skip);
 }
 
+/**
+ * In-flight rendezvous keys. Deliberately source-agnostic and distinct from the
+ * cache keys: nothing is ever stored under one (see `TTLCache.dedupe`), so two
+ * concurrent callers share a flight no matter which source ends up serving.
+ */
+function catalogRendezvous(catalogId: string, genre: string | undefined, skip: number): string {
+  return `catalog-req:${catalogId}:${genre ?? ''}:${skip}`;
+}
+
+function searchRendezvous(term: string, skip: number): string {
+  return `search-req:${term}:${skip}`;
+}
+
 export class CatalogService {
   private readonly source: SourceChain;
   private readonly cache: TTLCache;
@@ -100,16 +113,9 @@ export class CatalogService {
           return this.toResult(hit.value, 'stale');
         }
       }
-      const res = await this.source.fetchPage(args.catalogId, req, stickyKey);
-      const value: CachedPage = {
-        items: res.items.slice(0, PAGE_SIZE),
-        total: res.total,
-        sourceId: res.sourceId,
-      };
-      this.cache.set<CachedPage>(
-        catalogCacheKey(res.sourceId, args.catalogId, genre, skip),
-        value,
-        { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
+      const value = await this.cache.dedupe(
+        catalogRendezvous(args.catalogId, genre, skip),
+        () => this.fetchAndStoreCatalog(stickyKey, args.catalogId, req, genre, skip),
       );
       return this.toResult(value, 'fresh');
     } catch (err) {
@@ -138,12 +144,9 @@ export class CatalogService {
           return this.toSearchResult(hit.value, 'stale');
         }
       }
-      const res = await this.source.search(term, skip, PAGE_SIZE, stickyKey);
-      const value: CachedPage = { items: res.items, total: res.total, sourceId: res.sourceId };
-      this.cache.set<CachedPage>(searchCacheKey(res.sourceId, term, skip), value, {
-        ttlMs: SEARCH_TTL_MS,
-        staleMs: CATALOG_STALE_MS,
-      });
+      const value = await this.cache.dedupe(searchRendezvous(term, skip), () =>
+        this.fetchAndStoreSearch(stickyKey, term, skip),
+      );
       return this.toSearchResult(value, 'fresh');
     } catch (err) {
       this.log?.error('catalog search failed', { err });
@@ -166,9 +169,51 @@ export class CatalogService {
   }
 
   /**
+   * Fetches through the chain and stores under the source that actually
+   * served. Shared by the cold path and the stale background refresh so a
+   * refresh heals a mispredicted entry instead of re-polluting the predicted one.
+   */
+  private async fetchAndStoreCatalog(
+    stickyKey: string,
+    catalogId: string,
+    req: PageRequest,
+    genre: string | undefined,
+    skip: number,
+  ): Promise<CachedPage> {
+    const res = await this.source.fetchPage(catalogId, req, stickyKey);
+    const value: CachedPage = {
+      items: res.items.slice(0, PAGE_SIZE),
+      total: res.total,
+      sourceId: res.sourceId,
+    };
+    this.cache.set<CachedPage>(
+      catalogCacheKey(res.sourceId, catalogId, genre, skip),
+      value,
+      { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
+    );
+    return value;
+  }
+
+  private async fetchAndStoreSearch(
+    stickyKey: string,
+    term: string,
+    skip: number,
+  ): Promise<CachedPage> {
+    const res = await this.source.search(term, skip, PAGE_SIZE, stickyKey);
+    const value: CachedPage = { items: res.items, total: res.total, sourceId: res.sourceId };
+    this.cache.set<CachedPage>(searchCacheKey(res.sourceId, term, skip), value, {
+      ttlMs: SEARCH_TTL_MS,
+      staleMs: CATALOG_STALE_MS,
+    });
+    return value;
+  }
+
+  /**
    * Stale-while-revalidate: the stale page was already served; this only
    * replaces the entry on success and never throws, so a failed refresh
-   * simply leaves the stale entry until its stale window expires.
+   * simply leaves the stale entry until its stale window expires. Joins the
+   * in-flight load when one is already running, so concurrent stale hits cost
+   * one refresh, not one each.
    */
   private refreshCatalog(
     stickyKey: string,
@@ -177,33 +222,16 @@ export class CatalogService {
     genre: string | undefined,
     skip: number,
   ): void {
-    this.source
-      .fetchPage(catalogId, req, stickyKey)
-      .then((res) => {
-        const value: CachedPage = {
-          items: res.items.slice(0, PAGE_SIZE),
-          total: res.total,
-          sourceId: res.sourceId,
-        };
-        this.cache.set<CachedPage>(
-          catalogCacheKey(res.sourceId, catalogId, genre, skip),
-          value,
-          { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
-        );
-      })
+    void this.cache
+      .dedupe(catalogRendezvous(catalogId, genre, skip), () =>
+        this.fetchAndStoreCatalog(stickyKey, catalogId, req, genre, skip),
+      )
       .catch(() => undefined);
   }
 
   private refreshSearch(stickyKey: string, term: string, skip: number): void {
-    this.source
-      .search(term, skip, PAGE_SIZE, stickyKey)
-      .then((res) => {
-        const value: CachedPage = { items: res.items, total: res.total, sourceId: res.sourceId };
-        this.cache.set<CachedPage>(searchCacheKey(res.sourceId, term, skip), value, {
-          ttlMs: SEARCH_TTL_MS,
-          staleMs: CATALOG_STALE_MS,
-        });
-      })
+    void this.cache
+      .dedupe(searchRendezvous(term, skip), () => this.fetchAndStoreSearch(stickyKey, term, skip))
       .catch(() => undefined);
   }
 }

@@ -158,3 +158,41 @@ describe('CatalogService.search', () => {
     expect(String(source.search.mock.calls[0]![0]).length).toBe(200);
   });
 });
+
+describe('CatalogService request dedup', () => {
+  it('two concurrent requests for the same cold catalog key cost exactly one chain call', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    const source = {
+      peekSticky: sticky(),
+      fetchPage: vi.fn(async () => { await gate; return pg(mk(3), 3); }),
+      search: vi.fn(),
+    };
+    const { s } = svc(source);
+    const args = { catalogId: 'anime-trending', type: 'anime', skip: 0 };
+    const both = Promise.all([s.getCatalogPage(args), s.getCatalogPage(args)]);
+    await new Promise((res) => setImmediate(res));
+    release();
+    const [a, b] = await both;
+    expect(source.fetchPage).toHaveBeenCalledTimes(1);
+    expect(ids(a.items)).toEqual(ids(b.items));
+    expect(a.items).toHaveLength(3);
+  });
+
+  it('two concurrent searches for the same cold term cost exactly one chain call', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((res) => { release = res; });
+    const source = {
+      peekSticky: sticky(),
+      fetchPage: vi.fn(),
+      search: vi.fn(async () => { await gate; return pg(mk(2), 2); }),
+    };
+    const { s } = svc(source);
+    const both = Promise.all([s.search({ term: 'bebop', skip: 0 }), s.search({ term: 'bebop', skip: 0 })]);
+    await new Promise((res) => setImmediate(res));
+    release();
+    const [a, b] = await both;
+    expect(source.search).toHaveBeenCalledTimes(1);
+    expect(ids(a.items)).toEqual(ids(b.items));
+  });
+});

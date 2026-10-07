@@ -12,6 +12,9 @@ import { HttpClient } from './net/http.js';
 import { TokenBucket } from './net/limiter.js';
 import { TTLCache } from './cache/store.js';
 import { AniListSource } from './sources/anilist/adapter.js';
+import { KitsuSource } from './sources/kitsu/adapter.js';
+import { SourceChain } from './sources/chain.js';
+import { CircuitBreaker } from './net/breaker.js';
 import { CatalogService } from './services/catalog.service.js';
 import { MetaService } from './services/meta.service.js';
 import { createLogger } from './util/logger.js';
@@ -88,9 +91,21 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
     refillPerMinute: config.anilistRateLimitPerMinute,
   });
   const cache = new TTLCache({ maxEntries: config.cacheMaxEntries });
-  const source = new AniListSource({ http, limiter, log });
-  const catalogService = overrides?.catalogService ?? new CatalogService({ source, cache, log });
-  const metaService = overrides?.metaService ?? new MetaService({ source, cache, log });
+  const anilist = new AniListSource({ http, limiter, log });
+  const kitsu = new KitsuSource({ http, limiter, log });
+  const chain = new SourceChain({
+    sources: [anilist, kitsu],
+    breakers: new Map([
+      ['anilist', new CircuitBreaker()],
+      ['kitsu', new CircuitBreaker()],
+    ]),
+    // The chain's total budget follows the operator's configured timeout, which
+    // the config clamps to <= 4000 ms so a request stays inside Nuvio's
+    // 5000 ms meta budget. A literal here would silently ignore that setting.
+    budgetMs: config.httpTimeoutMs,
+  });
+  const catalogService = overrides?.catalogService ?? new CatalogService({ source: chain, cache, log });
+  const metaService = overrides?.metaService ?? new MetaService({ source: chain, cache, log });
 
   const builder = new sdk.addonBuilder(
     // Documented: `AniCataManifest` widens the SDK's `Manifest` with the
