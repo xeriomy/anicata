@@ -6,7 +6,7 @@ import type { Logger } from '../../util/logger.js';
 import type { AniListMedia, AniListGraphQLResponse, AniListPage } from './types.js';
 import { CATALOG_QUERY, META_QUERY, SEARCH_QUERY } from './queries.js';
 import { ANILIST_PER_PAGE } from '../catalog-def.js';
-import type { AniListPageQuery } from '../catalog-def.js';
+import type { AnimeSource, PageRequest, SourcePage, SourceId, SortKey } from '../types.js';
 import { normalizeMedia } from '../../normalize/anime.js';
 
 const ANILIST_URL = 'https://graphql.anilist.co';
@@ -42,11 +42,34 @@ function toSourceError(err: GraphQLError): SourceError {
   return new SourceError('invalid_request', message, err.status);
 }
 
-export class AniListSource {
+function sortForKey(key: SortKey): string[] {
+  switch (key) {
+    case 'trending':
+      return ['TRENDING_DESC'];
+    case 'top_rated':
+      return ['SCORE_DESC'];
+    case 'search_match':
+      return ['SEARCH_MATCH'];
+  }
+}
+
+function sortForCatalog(catalogId: string): string[] {
+  if (catalogId === 'anime-top-rated') {
+    return sortForKey('top_rated');
+  }
+  if (catalogId === 'anime-search') {
+    return sortForKey('search_match');
+  }
+  return sortForKey('trending');
+}
+
+export class AniListSource implements AnimeSource {
   private readonly http: HttpClient;
   private readonly limiter: TokenBucket;
   private readonly log: Logger | undefined;
   private readonly titleLang: 'english' | 'romaji' | 'native';
+
+  readonly id: SourceId = 'anilist';
 
   constructor(deps: AniListSourceDeps) {
     this.http = deps.http;
@@ -55,30 +78,45 @@ export class AniListSource {
     this.titleLang = deps.titleLang ?? 'english';
   }
 
-  async fetchCatalogPage(q: AniListPageQuery): Promise<{ items: Anime[]; total: number }> {
-    const variables: Record<string, unknown> = {
-      perPage: q.perPage,
-      page: q.page,
-      sort: q.sort,
-    };
-    if (q.search !== undefined) {
-      variables.search = q.search;
+  async fetchPage(req: PageRequest): Promise<SourcePage> {
+    const sort = sortForCatalog(req.catalogId);
+    const collected: Anime[] = [];
+    let total = 0;
+    let page = Math.floor(req.skip / ANILIST_PER_PAGE) + 1;
+    let offset = req.skip % ANILIST_PER_PAGE;
+    while (collected.length < req.limit) {
+      const variables: Record<string, unknown> = {
+        perPage: ANILIST_PER_PAGE,
+        page,
+        sort,
+      };
+      if (req.genre !== undefined) {
+        variables.genre = req.genre;
+      }
+      const body = await this.post<CatalogResponse>(CATALOG_QUERY, variables);
+      const res = this.toPageResult(body);
+      total = res.total;
+      collected.push(...(offset > 0 ? res.items.slice(offset) : res.items));
+      offset = 0;
+      if (res.items.length < ANILIST_PER_PAGE) {
+        break;
+      }
+      page += 1;
     }
-    if (q.genre !== undefined) {
-      variables.genre = q.genre;
-    }
-    const body = await this.post<CatalogResponse>(CATALOG_QUERY, variables);
-    return this.toPageResult(body);
+    return { items: collected.slice(0, req.limit), total };
   }
 
-  async search(term: string, page: number): Promise<{ items: Anime[]; total: number }> {
+  async search(term: string, skip: number, limit: number): Promise<SourcePage> {
+    const page = Math.floor(skip / ANILIST_PER_PAGE) + 1;
+    const offset = skip % ANILIST_PER_PAGE;
     const body = await this.post<CatalogResponse>(SEARCH_QUERY, {
       search: term,
       perPage: ANILIST_PER_PAGE,
       page,
-      sort: ['SEARCH_MATCH'],
+      sort: sortForKey('search_match'),
     });
-    return this.toPageResult(body);
+    const res = this.toPageResult(body);
+    return { items: res.items.slice(offset, offset + limit), total: res.total };
   }
 
   async fetchById(anilistId: number): Promise<Anime | null> {

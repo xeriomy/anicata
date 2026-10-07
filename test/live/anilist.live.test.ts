@@ -18,7 +18,7 @@ live('AniList live smoke', () => {
   it('serves a catalogue page and clamps perPage to 50', async () => {
     // AniList silently clamps perPage to 50, so asking for 100 still yields
     // at most 50 items in one request.
-    const r = await mk().fetchCatalogPage({ sort: ['TRENDING_DESC'], page: 1, perPage: 100 });
+    const r = await mk().fetchPage({ catalogId: 'anime-trending', skip: 0, limit: 50 });
     expect(r.items.length).toBeGreaterThan(0);
     expect(r.items.length).toBeLessThanOrEqual(50);
     expect(r.items[0]!.identity.anilist).toBeTypeOf('number');

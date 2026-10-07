@@ -1,13 +1,9 @@
-import { CATALOG_DEFS, PAGE_SIZE, ANILIST_PER_PAGE } from '../sources/catalog-def.js';
-import type { AniListPageQuery, CatalogDefinition } from '../sources/catalog-def.js';
+import { CATALOG_DEFS, PAGE_SIZE } from '../sources/catalog-def.js';
+import type { CatalogDefinition } from '../sources/catalog-def.js';
+import type { AnimeSource, PageRequest } from '../sources/types.js';
 import type { Anime } from '../domain/anime.js';
 import type { TTLCache } from '../cache/store.js';
 import type { Logger } from '../util/logger.js';
-
-export interface AnimeSource {
-  fetchCatalogPage(q: AniListPageQuery): Promise<{ items: Anime[]; total: number }>;
-  search(term: string, page: number): Promise<{ items: Anime[]; total: number }>;
-}
 
 export const CATALOG_TTL_MS = 15 * 60 * 1000;
 export const CATALOG_STALE_MS = 6 * 60 * 60 * 1000;
@@ -57,27 +53,13 @@ export class CatalogService {
       const skip = coerceSkip(args.skip);
       const genre = args.genre;
       const key = `catalog:${args.catalogId}:${genre ?? ''}:${skip}`;
-      const base = def.buildQuery(skip);
       const loader = async (): Promise<{ items: Anime[]; total: number }> => {
-        const collected: Anime[] = [];
-        let total = 0;
-        let page = Math.floor(skip / ANILIST_PER_PAGE) + 1;
-        let offset = skip % ANILIST_PER_PAGE;
-        while (collected.length < PAGE_SIZE) {
-          const q: AniListPageQuery = { ...base, page };
-          if (genre !== undefined) {
-            q.genre = genre;
-          }
-          const res = await this.source.fetchCatalogPage(q);
-          total = res.total;
-          collected.push(...(offset > 0 ? res.items.slice(offset) : res.items));
-          offset = 0;
-          if (res.items.length < ANILIST_PER_PAGE) {
-            break;
-          }
-          page += 1;
+        const req: PageRequest = { catalogId: args.catalogId, skip, limit: PAGE_SIZE };
+        if (genre !== undefined) {
+          req.genre = genre;
         }
-        return { items: collected.slice(0, PAGE_SIZE), total };
+        const res = await this.source.fetchPage(req);
+        return { items: res.items.slice(0, PAGE_SIZE), total: res.total };
       };
       const { value, freshness } = await this.cache.wrap(
         key,
@@ -102,12 +84,11 @@ export class CatalogService {
       }
       const term = trimmed.slice(0, 200);
       const skip = coerceSkip(args.skip);
-      const page = Math.floor(skip / ANILIST_PER_PAGE) + 1;
       const key = `search:${term}:${skip}`;
       const { value, freshness } = await this.cache.wrap(
         key,
         { ttlMs: SEARCH_TTL_MS, staleMs: CATALOG_STALE_MS },
-        async () => this.source.search(term, page),
+        async () => this.source.search(term, skip, PAGE_SIZE),
       );
       if (value.items.length === 0) {
         return { items: value.items, cacheMaxAge: 60, freshness };
