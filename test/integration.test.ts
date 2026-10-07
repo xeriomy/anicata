@@ -25,9 +25,9 @@ const app = createApp({
     },
     search: async () => ({ items: [fake(1)], cacheMaxAge: 1800, freshness: 'fresh' }),
   } as never,
-  metaService: { getByAnilistId: async (id: number) =>
-    id === 21 ? { anime: fake(21, { countryOfOrigin: 'JP' }), cacheMaxAge: 604800, freshness: 'fresh' }
-              : { anime: null, cacheMaxAge: 60, freshness: 'fresh' } } as never,
+  metaService: { getById: async (id: string) =>
+    id === 'anilist:21' ? { anime: fake(21, { countryOfOrigin: 'JP' }), cacheMaxAge: 604800, freshness: 'fresh' }
+                        : { anime: null, cacheMaxAge: 60, freshness: 'fresh' } } as never,
 });
 
 describe('GET /manifest.json', () => {
@@ -169,7 +169,7 @@ describe('never returns a non-200', () => {
     const broken = createApp({
       catalogService: { getCatalogPage: async () => { throw new Error('boom'); },
                         search: async () => { throw new Error('boom'); } } as never,
-      metaService: { getByAnilistId: async () => { throw new Error('boom'); } } as never,
+      metaService: { getById: async () => { throw new Error('boom'); } } as never,
     });
     for (const path of ['/catalog/anime/anime-trending.json',
                         '/catalog/anime/anime-search/search=x.json',
@@ -187,7 +187,7 @@ describe('never returns a non-200', () => {
     // silently skip this add-on and fall through to TMDB. Proved here rather than
     // inferred, because the catalogue test above cannot reach it.
     const broken = createApp({
-      metaService: { getByAnilistId: async () => { throw new Error('boom'); } } as never,
+      metaService: { getById: async () => { throw new Error('boom'); } } as never,
     });
     for (const path of ['/meta/anime/anilist%3A21.json', '/meta/anime/21.json',
                         '/meta/anime/garbage.json']) {
