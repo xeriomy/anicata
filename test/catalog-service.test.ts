@@ -7,6 +7,8 @@ import type { Anime } from '../src/domain/anime.js';
 const ids = (items: Anime[]) => items.map(i => i.identity.anilist);
 const mk = (n: number, from = 0) =>
   Array.from({ length: n }, (_, i) => ({ identity: { anilist: from + i } })) as never;
+const pg = (items: never, total: number) => ({ items, total, sourceId: 'anilist', fromFallback: false });
+const sticky = () => vi.fn().mockReturnValue('anilist');
 
 function svc(source: unknown, cache = new TTLCache()) {
   return { s: new CatalogService({ source: source as never, cache }), cache, source };
@@ -14,7 +16,7 @@ function svc(source: unknown, cache = new TTLCache()) {
 
 describe('CatalogService.getCatalogPage', () => {
   it('returns exactly 100 items for skip=0 with a single source call', async () => {
-    const source = { fetchPage: vi.fn().mockResolvedValue({ items: mk(100), total: 5000 }),
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(100), 5000)),
                      search: vi.fn() };
     const { s } = svc(source);
     const r = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
@@ -22,15 +24,16 @@ describe('CatalogService.getCatalogPage', () => {
     // The service no longer stitches AniList pages itself; one Nuvio page is
     // one fetchPage call. The two-request stitching now lives in the adapter.
     expect(source.fetchPage).toHaveBeenCalledTimes(1);
-    expect(source.fetchPage).toHaveBeenCalledWith({ catalogId: 'anime-trending', skip: 0, limit: PAGE_SIZE });
+    expect(source.fetchPage).toHaveBeenCalledWith('anime-trending', { catalogId: 'anime-trending', skip: 0, limit: PAGE_SIZE }, 'anime-trending:');
     expect(ids(r.items)).toHaveLength(100);
   });
 
   it('slices [skip, skip+100) so skip=100 shares no ids with skip=0', async () => {
     const all = Array.from({ length: 250 }, (_, i) => ({ identity: { anilist: i + 1 } }));
     const source = {
-      fetchPage: vi.fn(async ({ skip, limit }: { skip: number; limit: number }) =>
-        ({ items: all.slice(skip, skip + limit) as never, total: 5000 })),
+      peekSticky: sticky(),
+      fetchPage: vi.fn(async (_catalogId: string, { skip, limit }: { skip: number; limit: number }) =>
+        pg(all.slice(skip, skip + limit) as never, 5000)),
       search: vi.fn(),
     };
     const { s } = svc(source);
@@ -45,8 +48,9 @@ describe('CatalogService.getCatalogPage', () => {
   it('returns a short final page rather than padding', async () => {
     const all = Array.from({ length: 120 }, (_, i) => ({ identity: { anilist: i + 1 } }));
     const source = {
-      fetchPage: vi.fn(async ({ skip, limit }: { skip: number; limit: number }) =>
-        ({ items: all.slice(skip, skip + limit) as never, total: 120 })),
+      peekSticky: sticky(),
+      fetchPage: vi.fn(async (_catalogId: string, { skip, limit }: { skip: number; limit: number }) =>
+        pg(all.slice(skip, skip + limit) as never, 120)),
       search: vi.fn(),
     };
     const { s } = svc(source);
@@ -54,7 +58,7 @@ describe('CatalogService.getCatalogPage', () => {
   });
 
   it('returns an empty page past the end so pagination terminates', async () => {
-    const source = { fetchPage: vi.fn().mockResolvedValue({ items: [], total: 120 }), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg([] as never, 120)), search: vi.fn() };
     const { s } = svc(source);
     const r = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 5000 });
     expect(r.items).toEqual([]);
@@ -64,13 +68,13 @@ describe('CatalogService.getCatalogPage', () => {
   it('does NOT pad a short page back to 100 items', async () => {
     // A short page means the end of the list; padding would make Nuvio's nextSkip
     // point past data and strand the user on an empty page.
-    const source = { fetchPage: vi.fn().mockResolvedValue({ items: mk(12), total: 5000 }), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(12), 5000)), search: vi.fn() };
     const { s } = svc(source);
     expect((await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 })).items).toHaveLength(12);
   });
 
   it('caches by catalog+skip so a repeated skip yields identical ids', async () => {
-    const source = { fetchPage: vi.fn().mockResolvedValue({ items: mk(50), total: 5000 }), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(50), 5000)), search: vi.fn() };
     const { s } = svc(source);
     const a = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
     const b = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
@@ -79,16 +83,16 @@ describe('CatalogService.getCatalogPage', () => {
   });
 
   it('keys the cache by genre as well as catalog and skip', async () => {
-    const source = { fetchPage: vi.fn().mockResolvedValue({ items: mk(50), total: 5000 }), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(50), 5000)), search: vi.fn() };
     const { s } = svc(source);
     await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
     await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0, genre: 'Action' });
     expect(source.fetchPage).toHaveBeenCalledTimes(2);
-    expect(source.fetchPage).toHaveBeenLastCalledWith({ catalogId: 'anime-trending', skip: 0, limit: PAGE_SIZE, genre: 'Action' });
+    expect(source.fetchPage).toHaveBeenLastCalledWith('anime-trending', { catalogId: 'anime-trending', skip: 0, limit: PAGE_SIZE, genre: 'Action' }, 'anime-trending:Action');
   });
 
   it('rejects an unknown catalog id without touching the source', async () => {
-    const source = { fetchPage: vi.fn(), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn() };
     const { s } = svc(source);
     const r = await s.getCatalogPage({ catalogId: 'anime-nope', type: 'anime', skip: 0 });
     expect(r.items).toEqual([]);
@@ -96,7 +100,7 @@ describe('CatalogService.getCatalogPage', () => {
   });
 
   it('rejects a mismatched type without touching the source', async () => {
-    const source = { fetchPage: vi.fn(), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn() };
     const { s } = svc(source);
     expect((await s.getCatalogPage({ catalogId: 'anime-trending', type: 'movie', skip: 0 })).items).toEqual([]);
     expect(source.fetchPage).not.toHaveBeenCalled();
@@ -105,9 +109,10 @@ describe('CatalogService.getCatalogPage', () => {
   it('serves stale from the cache when the source throws', async () => {
     let fail = false;
     const source = {
+      peekSticky: sticky(),
       fetchPage: vi.fn(async () => {
         if (fail) throw Object.assign(new Error('down'), { kind: 'server_error' });
-        return { items: mk(50), total: 5000 };
+        return pg(mk(50), 5000);
       }),
       search: vi.fn(),
     };
@@ -123,7 +128,7 @@ describe('CatalogService.getCatalogPage', () => {
   });
 
   it('returns an empty page, not an exception, when the source fails with no cache', async () => {
-    const source = { fetchPage: vi.fn().mockRejectedValue(Object.assign(new Error('down'), { kind: 'timeout' })), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockRejectedValue(Object.assign(new Error('down'), { kind: 'timeout' })), search: vi.fn() };
     const { s } = svc(source);
     const r = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
     expect(r.items).toEqual([]);
@@ -132,21 +137,21 @@ describe('CatalogService.getCatalogPage', () => {
 
 describe('CatalogService.search', () => {
   it('returns items for a term', async () => {
-    const source = { fetchPage: vi.fn(), search: vi.fn().mockResolvedValue({ items: mk(3), total: 3 }) };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn().mockResolvedValue(pg(mk(3), 3)) };
     const { s } = svc(source);
     expect((await s.search({ term: 'cowboy bebop', skip: 0 })).items).toHaveLength(3);
-    expect(source.search).toHaveBeenCalledWith('cowboy bebop', 0, PAGE_SIZE);
+    expect(source.search).toHaveBeenCalledWith('cowboy bebop', 0, PAGE_SIZE, 'search:cowboy bebop');
   });
 
   it('returns empty without calling the source for a blank term', async () => {
-    const source = { fetchPage: vi.fn(), search: vi.fn() };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn() };
     const { s } = svc(source);
     expect((await s.search({ term: '   ', skip: 0 })).items).toEqual([]);
     expect(source.search).not.toHaveBeenCalled();
   });
 
   it('truncates a very long term to 200 characters', async () => {
-    const source = { fetchPage: vi.fn(), search: vi.fn().mockResolvedValue({ items: [], total: 0 }) };
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn().mockResolvedValue(pg([] as never, 0)) };
     const { s } = svc(source);
     await s.search({ term: 'x'.repeat(500), skip: 0 });
     expect(String(source.search.mock.calls[0]![0]).length).toBe(200);

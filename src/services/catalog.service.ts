@@ -1,6 +1,7 @@
 import { CATALOG_DEFS, PAGE_SIZE } from '../sources/catalog-def.js';
 import type { CatalogDefinition } from '../sources/catalog-def.js';
-import type { AnimeSource, PageRequest } from '../sources/types.js';
+import type { PageRequest, SourceId } from '../sources/types.js';
+import type { SourceChain } from '../sources/chain.js';
 import type { Anime } from '../domain/anime.js';
 import type { TTLCache } from '../cache/store.js';
 import type { Logger } from '../util/logger.js';
@@ -16,9 +17,34 @@ export interface CatalogPageResult {
 }
 
 export interface CatalogServiceDeps {
-  source: AnimeSource;
+  source: SourceChain;
   cache: TTLCache;
   log?: Logger;
+}
+
+export function catalogCacheKey(
+  sourceId: SourceId,
+  catalogId: string,
+  genre: string | undefined,
+  skip: number,
+): string {
+  return `catalog:${sourceId}:${catalogId}:${genre ?? ''}:${skip}`;
+}
+
+export function searchCacheKey(sourceId: SourceId, term: string, skip: number): string {
+  return `search:${sourceId}:${term}:${skip}`;
+}
+
+/**
+ * What the cache holds. The `sourceId` travels with the page because the key
+ * itself is built from it: the key can only be computed after the chain
+ * reports which source served, so the loader's value must carry it out to the
+ * key-building site.
+ */
+interface CachedPage {
+  items: Anime[];
+  total: number;
+  sourceId: SourceId;
 }
 
 function coerceSkip(skip: number): number {
@@ -29,7 +55,7 @@ function coerceSkip(skip: number): number {
 }
 
 export class CatalogService {
-  private readonly source: AnimeSource;
+  private readonly source: SourceChain;
   private readonly cache: TTLCache;
   private readonly log: Logger | undefined;
 
@@ -52,24 +78,40 @@ export class CatalogService {
       }
       const skip = coerceSkip(args.skip);
       const genre = args.genre;
-      const key = `catalog:${args.catalogId}:${genre ?? ''}:${skip}`;
-      const loader = async (): Promise<{ items: Anime[]; total: number }> => {
-        const req: PageRequest = { catalogId: args.catalogId, skip, limit: PAGE_SIZE };
-        if (genre !== undefined) {
-          req.genre = genre;
-        }
-        const res = await this.source.fetchPage(req);
-        return { items: res.items.slice(0, PAGE_SIZE), total: res.total };
-      };
-      const { value, freshness } = await this.cache.wrap(
-        key,
-        { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
-        loader,
-      );
-      if (value.items.length === 0) {
-        return { items: value.items, cacheMaxAge: 60, freshness };
+      // The caller owns its stickiness scope: one entry per catalogue+genre so
+      // a mid-scroll fallback sticks for the rest of the scroll. Always passed
+      // explicitly — an omitted key would silently disable stickiness.
+      const stickyKey = `${args.catalogId}:${genre ?? ''}`;
+      const req: PageRequest = { catalogId: args.catalogId, skip, limit: PAGE_SIZE };
+      if (genre !== undefined) {
+        req.genre = genre;
       }
-      return { items: value.items, cacheMaxAge: freshness === 'stale' ? 30 : 900, freshness };
+      // The serving source is only known after the fetch, so consult the cache
+      // under the sticky-predicted source; on a cold key (or a misprediction)
+      // fetch first, then store under the source that actually served.
+      const predicted = this.source.peekSticky(stickyKey);
+      if (predicted !== undefined) {
+        const hit = this.cache.get<CachedPage>(catalogCacheKey(predicted, args.catalogId, genre, skip));
+        if (hit !== undefined) {
+          if (hit.freshness === 'fresh') {
+            return this.toResult(hit.value);
+          }
+          this.refreshCatalog(stickyKey, args.catalogId, req, genre, skip);
+          return { ...this.toResult(hit.value), freshness: 'stale' };
+        }
+      }
+      const res = await this.source.fetchPage(args.catalogId, req, stickyKey);
+      const value: CachedPage = {
+        items: res.items.slice(0, PAGE_SIZE),
+        total: res.total,
+        sourceId: res.sourceId,
+      };
+      this.cache.set<CachedPage>(
+        catalogCacheKey(res.sourceId, args.catalogId, genre, skip),
+        value,
+        { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
+      );
+      return this.toResult(value);
     } catch (err) {
       this.log?.error('catalog page failed', { catalogId: args?.catalogId, err });
       return { items: [], cacheMaxAge: 10, freshness: 'fresh' };
@@ -84,19 +126,84 @@ export class CatalogService {
       }
       const term = trimmed.slice(0, 200);
       const skip = coerceSkip(args.skip);
-      const key = `search:${term}:${skip}`;
-      const { value, freshness } = await this.cache.wrap(
-        key,
-        { ttlMs: SEARCH_TTL_MS, staleMs: CATALOG_STALE_MS },
-        async () => this.source.search(term, skip, PAGE_SIZE),
-      );
-      if (value.items.length === 0) {
-        return { items: value.items, cacheMaxAge: 60, freshness };
+      const stickyKey = `search:${term}`;
+      const predicted = this.source.peekSticky(stickyKey);
+      if (predicted !== undefined) {
+        const hit = this.cache.get<CachedPage>(searchCacheKey(predicted, term, skip));
+        if (hit !== undefined) {
+          if (hit.freshness === 'fresh') {
+            return this.toSearchResult(hit.value);
+          }
+          this.refreshSearch(stickyKey, term, skip);
+          return { ...this.toSearchResult(hit.value), freshness: 'stale' };
+        }
       }
-      return { items: value.items, cacheMaxAge: freshness === 'stale' ? 30 : 1800, freshness };
+      const res = await this.source.search(term, skip, PAGE_SIZE, stickyKey);
+      const value: CachedPage = { items: res.items, total: res.total, sourceId: res.sourceId };
+      this.cache.set<CachedPage>(searchCacheKey(res.sourceId, term, skip), value, {
+        ttlMs: SEARCH_TTL_MS,
+        staleMs: CATALOG_STALE_MS,
+      });
+      return this.toSearchResult(value);
     } catch (err) {
       this.log?.error('catalog search failed', { err });
       return { items: [], cacheMaxAge: 10, freshness: 'fresh' };
     }
+  }
+
+  private toResult(value: CachedPage): CatalogPageResult {
+    if (value.items.length === 0) {
+      return { items: value.items, cacheMaxAge: 60, freshness: 'fresh' };
+    }
+    return { items: value.items, cacheMaxAge: 900, freshness: 'fresh' };
+  }
+
+  private toSearchResult(value: CachedPage): CatalogPageResult {
+    if (value.items.length === 0) {
+      return { items: value.items, cacheMaxAge: 60, freshness: 'fresh' };
+    }
+    return { items: value.items, cacheMaxAge: 1800, freshness: 'fresh' };
+  }
+
+  /**
+   * Stale-while-revalidate: the stale page was already served; this only
+   * replaces the entry on success and never throws, so a failed refresh
+   * simply leaves the stale entry until its stale window expires.
+   */
+  private refreshCatalog(
+    stickyKey: string,
+    catalogId: string,
+    req: PageRequest,
+    genre: string | undefined,
+    skip: number,
+  ): void {
+    this.source
+      .fetchPage(catalogId, req, stickyKey)
+      .then((res) => {
+        const value: CachedPage = {
+          items: res.items.slice(0, PAGE_SIZE),
+          total: res.total,
+          sourceId: res.sourceId,
+        };
+        this.cache.set<CachedPage>(
+          catalogCacheKey(res.sourceId, catalogId, genre, skip),
+          value,
+          { ttlMs: CATALOG_TTL_MS, staleMs: CATALOG_STALE_MS },
+        );
+      })
+      .catch(() => undefined);
+  }
+
+  private refreshSearch(stickyKey: string, term: string, skip: number): void {
+    this.source
+      .search(term, skip, PAGE_SIZE, stickyKey)
+      .then((res) => {
+        const value: CachedPage = { items: res.items, total: res.total, sourceId: res.sourceId };
+        this.cache.set<CachedPage>(searchCacheKey(res.sourceId, term, skip), value, {
+          ttlMs: SEARCH_TTL_MS,
+          staleMs: CATALOG_STALE_MS,
+        });
+      })
+      .catch(() => undefined);
   }
 }
