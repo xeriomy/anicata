@@ -526,6 +526,94 @@ so short pages paginate correctly.
 
 ---
 
+## ADR-018 — Config surface is additive, query-borne, provider-neutral: seams now, UI later
+
+**Status:** Accepted
+
+**Context.** The stated future direction is a user-configurable add-on —
+settings, providers, and more. Not now, but the design must not foreclose it.
+Phase 3 (identity/mapping) is being built right now, which is exactly where
+configurability goes to die if the seams are missing: namespace handling,
+resolver tier order, and source assembly are all decided there. The reference
+project is the warning — `demdex/nuvio-anime` ships 19 catalogues of which 8
+(kids) ignore the `enabledCatalogs` config (`server.js:73-81`, recorded in
+`research.md` §8.1): config with partial effect, undocumented. And ADR-015
+already identified the channel: Nuvio preserves the manifest URL's query string
+and re-attaches it to every request, so per-install settings need no UI, no
+auth, no server-side state. One honest caveat, documented in
+`src/config/index.ts`: `stremio-addon-sdk`'s router derives extras solely from
+the final path segment and discards `req.query` before any handler sees it, so
+the query channel is verified at the Nuvio end but **not yet wired** through
+the SDK — that wiring is deferred to Phase 8, and `parseRequestConfig` is
+retained and tested until then. This ADR extends ADR-015; it changes nothing
+about statelessness or privacy.
+
+**Decision.** Two-layer config, unchanged — plus binding seams Phase 3 must
+respect:
+
+1. **Operator layer** (`AppConfig`, from env: `PORT`, `LOG_LEVEL`,
+   `ANILIST_URL`, `ANILIST_RATE_LIMIT`, `HTTP_TIMEOUT_MS`, `CACHE_MAX_ENTRIES`
+   — see `loadAppConfig` in `src/config/index.ts`) declines variety per
+   install. It configures the process, never the user.
+2. **User/instance layer** (`RequestConfig`, from the manifest URL query via
+   `parseRequestConfig` — currently just `titleLang`) rides the preserved
+   query, the channel ADR-015 identified. No server-side user state ever:
+   stateless + privacy-clean stays true. Note: ADR-015 names `includeAdult`
+   alongside `titleLang`, but only `titleLang` exists in code today — further
+   settings are additive rows, not redesigns.
+3. **Binding seams for Phase 3** (the point of this ADR — these are
+   requirements on code being written now, not descriptions of code that
+   exists):
+   - Namespace/id handling is **table-driven from a single registry** — one
+     row per namespace (prefix, parse, format, validate). Enabling/disabling
+     namespaces later is a filter over the table, not a rewrite.
+   - Resolver **tier order and tier enablement come from a config object**,
+     never literals inline. Today `src/index.ts` still builds the chain with
+     the literal `sources: [anilist, kitsu]` — that literal is the thing this
+     rule exists to move behind a config object, so "which providers, in
+     which order" is data, not code.
+   - Source assembly stays config-shaped: once the chain is built from a
+     config object, per-install provider selection arrives without touching
+     the composition root again.
+   - Every setting has a **default**, and unknown/garbage query values fall
+     back — the established pattern is `parseRequestConfig`'s
+     `found ?? 'english'`, covered by `test/config.test.ts` (including
+     `titleLang=klingon → 'english'`). No setting may throw on bad input.
+
+**Alternatives rejected**
+
+- **A `/configure` web UI now:** premature — there are no settings to expose
+  yet (one parsed key, zero consumers), and Nuvio preserves the query anyway,
+  so a UI would be scaffolding around an empty form. Deferred to Phase 8,
+  where `titleLang` becomes a real form field.
+- **Per-user server-side settings (accounts, DB rows, cookies):** breaks the
+  statelessness and privacy-clean posture ADR-015 bought — the exact
+  contamination the brief places out of scope. Every install is already
+  distinguished by its manifest URL; storing anything per user adds cost for
+  zero capability.
+- **Hardcoded provider order in the resolver:** the mistake this ADR exists
+  to prevent. A literal tier order means every future "prefer X over Y" or
+  "disable Z" request is a code change with deploy risk — the reference
+  project's `enabledCatalogs`-ignoring catalogues show where that road ends.
+  Order and enablement are data from day one.
+
+**Consequences**
+
+- ✅ Cheap later: users pick namespaces, providers, and catalogue sets via
+  the manifest URL query, or via a Phase 8 `/configure` UI that writes the
+  same query — the UI is a writer for a channel that already works, not a new
+  mechanism.
+- ✅ Additive by construction: a new setting is a new row with a default;
+  old install URLs keep working because every default preserves current
+  behaviour.
+- ❌ Stays impossible: login-gated personalisation, watch-state, per-user
+  server state. That boundary is permanent (ADR-015).
+- ⚠ Honest cost now: a bit of indirection in Phase 3 (registry table,
+  config object) for settings that do not exist yet — accepted deliberately.
+  The alternative is a rewrite the week configurability is requested.
+
+---
+
 ## Decision index
 
 | ADR | Decision | Reversible? |
@@ -547,3 +635,4 @@ so short pages paginate correctly.
 | 015 | No user context / no tracking | By design, permanent |
 | 016 | `kitsu:` declared, emitted later | Easy |
 | 017 | Kitsu fallback serves budget-aware partial pages | Easy |
+| 018 | Additive query-borne config; seams now, UI later | Easy |
