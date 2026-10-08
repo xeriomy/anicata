@@ -15,6 +15,7 @@
     "test:live": "vitest run test/live",
     "lint": "eslint src test",
     "typecheck": "tsc -p tsconfig.test.json",
+    "identity:build": "npm run build && node scripts/build-identity.mjs",
     "format": "prettier --write ."
   },
   "keywords": [],

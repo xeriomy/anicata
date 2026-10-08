@@ -4,3 +4,4 @@ coverage/
 .env
 *.log
 .superpowers/
+data/identity.min.json.gz
