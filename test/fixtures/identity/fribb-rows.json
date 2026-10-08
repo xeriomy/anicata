@@ -1,0 +1,65 @@
+{
+  "one_piece": {
+    "type": "TV",
+    "anidb_id": 69,
+    "anilist_id": 21,
+    "animecountdown_id": 38636,
+    "animenewsnetwork_id": 836,
+    "anime-planet_id": "one-piece",
+    "anisearch_id": 2227,
+    "imdb_id": [
+      "tt0388629"
+    ],
+    "kitsu_id": 12,
+    "livechart_id": 321,
+    "mal_id": 21,
+    "simkl_id": 38636,
+    "themoviedb_id": {
+      "tv": 37854
+    },
+    "tvdb_id": 81797
+  },
+  "multi_imdb": {
+    "type": "MOVIE",
+    "anidb_id": 1250,
+    "anilist_id": 1441,
+    "animecountdown_id": 37340,
+    "animenewsnetwork_id": 51,
+    "anime-planet_id": "night-on-the-galactic-railroad",
+    "anisearch_id": 1102,
+    "imdb_id": [
+      "tt1920940",
+      "tt0089206"
+    ],
+    "kitsu_id": 1294,
+    "livechart_id": 6241,
+    "mal_id": 1441,
+    "simkl_id": 37340,
+    "themoviedb_id": {
+      "movie": [
+        37585
+      ]
+    }
+  },
+  "tmdb_movie_object": {
+    "type": "MOVIE",
+    "anidb_id": 7,
+    "anilist_id": 164,
+    "animecountdown_id": 36228,
+    "animenewsnetwork_id": 197,
+    "anime-planet_id": "princess-mononoke",
+    "anisearch_id": 3320,
+    "imdb_id": [
+      "tt0119698"
+    ],
+    "kitsu_id": 142,
+    "livechart_id": 3081,
+    "mal_id": 164,
+    "simkl_id": 36228,
+    "themoviedb_id": {
+      "movie": [
+        128
+      ]
+    }
+  }
+}
