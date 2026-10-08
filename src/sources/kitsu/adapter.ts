@@ -13,6 +13,8 @@ export interface KitsuSourceDeps {
   limiter: TokenBucket;
   log?: Logger;
   titleLang?: 'english' | 'romaji' | 'native';
+  /** Clock for budget accounting; defaults to Date.now. Tests inject a fake. */
+  now?: () => number;
 }
 
 // Kitsu caps page[limit] at 20, measured live on 2026-10-08: limit=10 and
@@ -21,6 +23,52 @@ export interface KitsuSourceDeps {
 // most this size — exactly as AniListSource stitches its own 50-per-request
 // cap — never a single call with the caller's full limit.
 export const KITSU_MAX_LIMIT = 20;
+
+// Floor, in ms, for starting another upstream call of a multi-call fill.
+// Derived from observed latency, not documentation: from this host on
+// 2026-10-08 a single 20-item Kitsu call costs 1.1–1.6 s, so filling a
+// 100-item page costs ~5–7 s against a 4.5 s chain budget (5 concurrent calls
+// measured 7.1–8.4 s wall — slower than sequential — so concurrency does not
+// help either). A call started with less than this left is near-certain to be
+// cut mid-flight by the chain deadline, which discards even the items already
+// collected — so stop and serve the partial page instead. Nuvio advances skip
+// by metas.length, so a short page is normal degradation, never an error.
+export const KITSU_PER_CALL_RESERVE_MS = 2000;
+
+// Tracks one fill sequence against the per-attempt budget the chain threaded
+// in. When no bound arrives (adapter unit tests, live probes) every call is
+// affordable and fills run to completion.
+class CallBudget {
+  private readonly budgetMs: number | undefined;
+  private readonly now: () => number;
+  private readonly startMs: number;
+
+  constructor(budgetMs: number | undefined, now: () => number) {
+    this.budgetMs = budgetMs;
+    this.now = now;
+    this.startMs = now();
+  }
+
+  /** False once the remaining budget cannot fit another upstream call. */
+  canAffordAnother(): boolean {
+    if (this.budgetMs === undefined) {
+      return true;
+    }
+    return this.budgetMs - (this.now() - this.startMs) >= KITSU_PER_CALL_RESERVE_MS;
+  }
+
+  /**
+   * Per-call timeout: the remaining budget, so an in-flight call self-aborts
+   * near the deadline instead of relying solely on the chain's race to cut
+   * it. Undefined (key omitted downstream) when no bound arrived.
+   */
+  timeoutForCall(): number | undefined {
+    if (this.budgetMs === undefined) {
+      return undefined;
+    }
+    return Math.max(0, this.budgetMs - (this.now() - this.startMs));
+  }
+}
 
 export function kitsuSort(sort: SortKey): string {
   switch (sort) {
@@ -199,6 +247,7 @@ export class KitsuSource implements AnimeSource {
   private readonly limiter: TokenBucket;
   private readonly log: Logger | undefined;
   private readonly titleLang: 'english' | 'romaji' | 'native';
+  private readonly now: () => number;
 
   readonly id: SourceId = 'kitsu';
 
@@ -207,21 +256,28 @@ export class KitsuSource implements AnimeSource {
     this.limiter = deps.limiter;
     this.log = deps.log;
     this.titleLang = deps.titleLang ?? 'english';
+    this.now = deps.now ?? Date.now;
   }
 
   async fetchPage(req: PageRequest): Promise<SourcePage> {
     // Kitsu rejects page[limit] > KITSU_MAX_LIMIT with HTTP 400 instead of
     // clamping, so a Nuvio page (limit 100) is stitched from sequential
-    // upstream calls of at most the cap. A short upstream page means the
-    // catalogue is exhausted — stop instead of firing a pointless final call.
-    // Each call carries the chain's per-attempt timeoutMs, and the chain's
-    // deadline races the whole sequence, so an overrun cuts it short.
+    // upstream calls of at most the cap. Stop when the page is full, when an
+    // upstream page comes up short (catalogue exhausted), or when the
+    // remaining budget cannot fit another call — a partial page served now
+    // beats a full page cut off mid-flight, which the deadline would discard
+    // entirely. 100 items when Kitsu is fast, fewer when slow, never empty
+    // for lack of trying: the first call always starts.
     const sort = sortForCatalog(req.catalogId);
     const collected: Anime[] = [];
     let total = 0;
     let offset = req.skip;
     let remaining = req.limit;
+    const budget = new CallBudget(req.timeoutMs, this.now);
     while (remaining > 0) {
+      if (collected.length > 0 && !budget.canAffordAnother()) {
+        break;
+      }
       const chunk = Math.min(remaining, KITSU_MAX_LIMIT);
       const body = await this.get<KitsuListResponse>(
         buildPageUrl({
@@ -230,7 +286,7 @@ export class KitsuSource implements AnimeSource {
           offset,
           ...(req.genre !== undefined ? { genre: req.genre } : {}),
         }),
-        req.timeoutMs,
+        budget.timeoutForCall(),
       );
       const page = this.toPageResult(body);
       total = page.total;
@@ -246,14 +302,22 @@ export class KitsuSource implements AnimeSource {
 
   async search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage> {
     // Same stitching as fetchPage: filter[text] search is subject to the same
-    // page[limit] cap, so large limits are sequential <=cap calls.
+    // page[limit] cap, so large limits are sequential <=cap calls with the
+    // same budget-aware stop.
     const collected: Anime[] = [];
     let total = 0;
     let offset = skip;
     let remaining = limit;
+    const budget = new CallBudget(timeoutMs, this.now);
     while (remaining > 0) {
+      if (collected.length > 0 && !budget.canAffordAnother()) {
+        break;
+      }
       const chunk = Math.min(remaining, KITSU_MAX_LIMIT);
-      const body = await this.get<KitsuListResponse>(buildSearchUrl(term, chunk, offset), timeoutMs);
+      const body = await this.get<KitsuListResponse>(
+        buildSearchUrl(term, chunk, offset),
+        budget.timeoutForCall(),
+      );
       const page = this.toPageResult(body);
       total = page.total;
       collected.push(...page.items);

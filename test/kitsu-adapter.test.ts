@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { KitsuSource, kitsuSort } from '../src/sources/kitsu/adapter.js';
+import { KitsuSource, kitsuSort, KITSU_PER_CALL_RESERVE_MS } from '../src/sources/kitsu/adapter.js';
 import type { AnimeSource } from '../src/sources/types.js';
 import { SourceError } from '../src/domain/errors.js';
 import { renderPreview } from '../src/render/preview.js';
@@ -228,21 +228,143 @@ describe('KitsuSource page[limit] cap stitching', () => {
   });
 
   it('forwards the per-attempt timeoutMs to every upstream call of a stitched sequence', async () => {
+    // Ample budget so all five calls start; each carries the remaining budget
+    // at its start (first call the full bound, later calls whatever is left).
     const dPage = deps(fullHundred());
-    await new KitsuSource(dPage).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 123 });
+    await new KitsuSource(dPage).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 20000 });
     expect(dPage._getJson).toHaveBeenCalledTimes(5);
     for (let i = 0; i < 5; i++) {
       const init = dPage._getJson.mock.calls[i]![1] as { timeoutMs?: number };
-      expect(init.timeoutMs).toBe(123);
+      expect(init.timeoutMs).toBeGreaterThan(20000 - 1000);
+      expect(init.timeoutMs).toBeLessThanOrEqual(20000);
     }
 
     const dSearch = deps(fullHundred());
-    await new KitsuSource(dSearch).search('frieren', 0, 100, 456);
+    await new KitsuSource(dSearch).search('frieren', 0, 100, 20000);
     expect(dSearch._getJson).toHaveBeenCalledTimes(5);
     for (let i = 0; i < 5; i++) {
       const init = dSearch._getJson.mock.calls[i]![1] as { timeoutMs?: number };
-      expect(init.timeoutMs).toBe(456);
+      expect(init.timeoutMs).toBeGreaterThan(20000 - 1000);
+      expect(init.timeoutMs).toBeLessThanOrEqual(20000);
     }
+  });
+});
+
+describe('KitsuSource budget-aware partial fill', () => {
+  // A single 20-item Kitsu call costs 1.1–1.6 s live, so a 100-item fill
+  // (~5–7 s) does not fit the 4.5 s chain budget. The adapter must stop before
+  // starting a call the remaining budget cannot fit and serve what it has:
+  // 100 items when Kitsu is fast, fewer when slow, never a doomed call. Time
+  // advances once per upstream call here, simulating slow Kitsu deterministically.
+  function pageOf(size: number, startId: number, total: number): unknown {
+    const records = pageFixture.data as unknown[];
+    const data = [];
+    for (let i = 0; i < size; i++) {
+      const clone = JSON.parse(JSON.stringify(records[i % records.length])) as { id: string };
+      clone.id = String(startId + i);
+      data.push(clone);
+    }
+    return { data, meta: { count: total } };
+  }
+
+  function fullHundred(): unknown[] {
+    return [
+      pageOf(20, 1, 500),
+      pageOf(20, 21, 500),
+      pageOf(20, 41, 500),
+      pageOf(20, 61, 500),
+      pageOf(20, 81, 500),
+    ];
+  }
+
+  function budgetDeps(payloads: unknown[], tickMs: number) {
+    let nowMs = 0;
+    const d = deps(payloads);
+    const inner = d._getJson.getMockImplementation();
+    d._getJson.mockImplementation(async (url, init) => {
+      nowMs += tickMs;
+      if (inner === undefined) {
+        throw new Error('budgetDeps: no inner mock implementation');
+      }
+      return inner(url, init);
+    });
+    return { http: d.http, limiter: d.limiter, log: d.log, now: () => nowMs, _getJson: d._getJson };
+  }
+
+  function callTimeouts(d: ReturnType<typeof budgetDeps>): (number | undefined)[] {
+    return d._getJson.mock.calls.map(
+      (c) => (c[1] as { headers?: Record<string, string>; timeoutMs?: number } | undefined)?.timeoutMs,
+    );
+  }
+
+  it('pins the per-call reserve at 2000 ms, the honest floor for a 1.1–1.6 s call', () => {
+    expect(KITSU_PER_CALL_RESERVE_MS).toBe(2000);
+  });
+
+  it('still fills to 100 with an ample budget', async () => {
+    const d = budgetDeps(fullHundred(), 1300);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 20000 });
+    expect(d._getJson).toHaveBeenCalledTimes(5);
+    expect(r.items).toHaveLength(100);
+    expect(r.total).toBe(500);
+  });
+
+  it('returns a partial page, not an empty one, when the budget is tight', async () => {
+    // 2500 ms budget, 1300 ms per call: the first call always starts, then
+    // 2500 − 1300 = 1200 < 2000 reserve stops the sequence at 20 items.
+    const d = budgetDeps(fullHundred(), 1300);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 2500 });
+    expect(d._getJson).toHaveBeenCalledTimes(1);
+    expect(r.items).toHaveLength(20);
+  });
+
+  it('never starts a call it cannot afford and shrinks each per-call timeout to what is left', async () => {
+    // 4000 ms budget, 1300 ms per call: call 1 (timeout 4000), then
+    // 4000 − 1300 = 2700 ≥ 2000 so call 2 (timeout 2700), then
+    // 4000 − 2600 = 1400 < 2000 so stop — the third call is never started.
+    const d = budgetDeps(fullHundred(), 1300);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 4000 });
+    expect(d._getJson).toHaveBeenCalledTimes(2);
+    expect(r.items).toHaveLength(40);
+    expect(callTimeouts(d)).toEqual([4000, 2700]);
+  });
+
+  it('keeps total meaningful for client paging when the fill was truncated', async () => {
+    const d = budgetDeps(fullHundred(), 1300);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 2500 });
+    expect(r.items).toHaveLength(20);
+    expect(r.total).toBe(500);
+  });
+
+  it('a short upstream page still terminates early under a budget', async () => {
+    const d = deps([pageOf(20, 1, 27), pageOf(7, 21, 27)]);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 4000 });
+    expect(d._getJson).toHaveBeenCalledTimes(2);
+    expect(r.items).toHaveLength(27);
+    expect(r.total).toBe(27);
+  });
+
+  it('fills fully with no bound even when each call is slow', async () => {
+    // The reserve only applies when the chain threaded a budget in; outside
+    // a chain (live probes, unit tests) fills run to completion.
+    const d = budgetDeps(fullHundred(), 5000);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100 });
+    expect(d._getJson).toHaveBeenCalledTimes(5);
+    expect(r.items).toHaveLength(100);
+  });
+
+  it('stitches search the same way: full with ample budget, partial when tight', async () => {
+    const dFull = budgetDeps(fullHundred(), 1300);
+    const rFull = await new KitsuSource(dFull).search('frieren', 0, 100, 20000);
+    expect(dFull._getJson).toHaveBeenCalledTimes(5);
+    expect(rFull.items).toHaveLength(100);
+    expect(rFull.total).toBe(500);
+
+    const dTight = budgetDeps(fullHundred(), 1300);
+    const rTight = await new KitsuSource(dTight).search('frieren', 0, 100, 2500);
+    expect(dTight._getJson).toHaveBeenCalledTimes(1);
+    expect(rTight.items).toHaveLength(20);
+    expect(rTight.total).toBe(500);
   });
 });
 
