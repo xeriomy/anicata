@@ -137,6 +137,115 @@ describe('KitsuSource.fetchPage', () => {
   });
 });
 
+describe('KitsuSource page[limit] cap stitching', () => {
+  // Kitsu rejects page[limit] > 20 with HTTP 400 (measured live 2026-10-08:
+  // limit=20 -> 200, limit=21 -> 400), so any limit above the cap must be
+  // stitched from sequential upstream calls of at most 20. These tests pin
+  // that: a limit-100 request must never emit page[limit]=100.
+  function pageOf(size: number, startId: number, total: number): unknown {
+    const records = pageFixture.data as unknown[];
+    const data = [];
+    for (let i = 0; i < size; i++) {
+      const clone = JSON.parse(JSON.stringify(records[i % records.length])) as { id: string };
+      clone.id = String(startId + i);
+      data.push(clone);
+    }
+    return { data, meta: { count: total } };
+  }
+
+  function fullHundred(): unknown[] {
+    return [
+      pageOf(20, 1, 500),
+      pageOf(20, 21, 500),
+      pageOf(20, 41, 500),
+      pageOf(20, 61, 500),
+      pageOf(20, 81, 500),
+    ];
+  }
+
+  function limitsOf(d: ReturnType<typeof deps>): (string | null)[] {
+    return d._getJson.mock.calls.map((_, i) => calledUrl(d, i).searchParams.get('page[limit]'));
+  }
+
+  function offsetsOf(d: ReturnType<typeof deps>): (string | null)[] {
+    return d._getJson.mock.calls.map((_, i) => calledUrl(d, i).searchParams.get('page[offset]'));
+  }
+
+  it('never requests page[limit] above 20 for a limit-100 fetchPage', async () => {
+    const d = deps(fullHundred());
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100 });
+    expect(d._getJson).toHaveBeenCalledTimes(5);
+    for (const limit of limitsOf(d)) {
+      expect(Number(limit)).toBeLessThanOrEqual(20);
+    }
+    expect(r.items).toHaveLength(100);
+  });
+
+  it('walks offsets 0/20/40/60/80 for a limit-100 fetchPage and reads total from meta.count', async () => {
+    const d = deps(fullHundred());
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100 });
+    expect(offsetsOf(d)).toEqual(['0', '20', '40', '60', '80']);
+    expect(r.total).toBe(500);
+    expect(new Set(r.items.map((a) => a.identity.kitsu)).size).toBe(100);
+  });
+
+  it('offsets a skip-100 page as 100/120/140/160/180', async () => {
+    const d = deps(fullHundred());
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-trending', skip: 100, limit: 100 });
+    expect(d._getJson).toHaveBeenCalledTimes(5);
+    expect(offsetsOf(d)).toEqual(['100', '120', '140', '160', '180']);
+    expect(r.items).toHaveLength(100);
+  });
+
+  it('stops the fetchPage sequence early when an upstream page comes up short', async () => {
+    const d = deps([pageOf(20, 1, 27), pageOf(7, 21, 27)]);
+    const r = await new KitsuSource(d).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100 });
+    expect(d._getJson).toHaveBeenCalledTimes(2);
+    expect(r.items).toHaveLength(27);
+    expect(r.total).toBe(27);
+  });
+
+  it('stitches a limit-100 search from capped calls with filter[text] and no sort', async () => {
+    const d = deps(fullHundred());
+    const r = await new KitsuSource(d).search('frieren', 0, 100);
+    expect(d._getJson).toHaveBeenCalledTimes(5);
+    for (const limit of limitsOf(d)) {
+      expect(Number(limit)).toBeLessThanOrEqual(20);
+    }
+    expect(offsetsOf(d)).toEqual(['0', '20', '40', '60', '80']);
+    const first = calledUrl(d);
+    expect(first.searchParams.get('filter[text]')).toBe('frieren');
+    expect(first.searchParams.has('sort')).toBe(false);
+    expect(r.items).toHaveLength(100);
+    expect(r.total).toBe(500);
+  });
+
+  it('stops the search sequence early when an upstream page comes up short', async () => {
+    const d = deps([pageOf(20, 1, 32), pageOf(12, 21, 32)]);
+    const r = await new KitsuSource(d).search('frieren', 0, 100);
+    expect(d._getJson).toHaveBeenCalledTimes(2);
+    expect(r.items).toHaveLength(32);
+  });
+
+  it('forwards the per-attempt timeoutMs to every upstream call of a stitched sequence', async () => {
+    const dPage = deps(fullHundred());
+    await new KitsuSource(dPage).fetchPage({ catalogId: 'anime-top-rated', skip: 0, limit: 100, timeoutMs: 123 });
+    expect(dPage._getJson).toHaveBeenCalledTimes(5);
+    for (let i = 0; i < 5; i++) {
+      const init = dPage._getJson.mock.calls[i]![1] as { timeoutMs?: number };
+      expect(init.timeoutMs).toBe(123);
+    }
+
+    const dSearch = deps(fullHundred());
+    await new KitsuSource(dSearch).search('frieren', 0, 100, 456);
+    expect(dSearch._getJson).toHaveBeenCalledTimes(5);
+    for (let i = 0; i < 5; i++) {
+      const init = dSearch._getJson.mock.calls[i]![1] as { timeoutMs?: number };
+      expect(init.timeoutMs).toBe(456);
+    }
+  });
+});
+
 describe('KitsuSource genres', () => {
   // Wrap the single-anime fixture's record in a list envelope so the join
   // runs through fetchPage exactly as production responses do.

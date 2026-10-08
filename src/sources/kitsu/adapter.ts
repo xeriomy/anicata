@@ -15,6 +15,13 @@ export interface KitsuSourceDeps {
   titleLang?: 'english' | 'romaji' | 'native';
 }
 
+// Kitsu caps page[limit] at 20, measured live on 2026-10-08: limit=10 and
+// limit=20 return 200 while limit=21 (and 50, 100) return 400. Any request
+// above the cap must therefore be stitched from multiple upstream calls of at
+// most this size — exactly as AniListSource stitches its own 50-per-request
+// cap — never a single call with the caller's full limit.
+export const KITSU_MAX_LIMIT = 20;
+
 export function kitsuSort(sort: SortKey): string {
   switch (sort) {
     case 'top_rated':
@@ -203,24 +210,60 @@ export class KitsuSource implements AnimeSource {
   }
 
   async fetchPage(req: PageRequest): Promise<SourcePage> {
-    // Kitsu takes page[offset]/page[limit] directly with no silent clamp
-    // (unlike AniList's 50-per-request clamp), so ask for what is needed in a
-    // single request instead of stitching pages.
-    const params: { sort: string; limit: number; offset: number; genre?: string } = {
-      sort: sortForCatalog(req.catalogId),
-      limit: req.limit,
-      offset: req.skip,
-    };
-    if (req.genre !== undefined) {
-      params.genre = req.genre;
+    // Kitsu rejects page[limit] > KITSU_MAX_LIMIT with HTTP 400 instead of
+    // clamping, so a Nuvio page (limit 100) is stitched from sequential
+    // upstream calls of at most the cap. A short upstream page means the
+    // catalogue is exhausted — stop instead of firing a pointless final call.
+    // Each call carries the chain's per-attempt timeoutMs, and the chain's
+    // deadline races the whole sequence, so an overrun cuts it short.
+    const sort = sortForCatalog(req.catalogId);
+    const collected: Anime[] = [];
+    let total = 0;
+    let offset = req.skip;
+    let remaining = req.limit;
+    while (remaining > 0) {
+      const chunk = Math.min(remaining, KITSU_MAX_LIMIT);
+      const body = await this.get<KitsuListResponse>(
+        buildPageUrl({
+          sort,
+          limit: chunk,
+          offset,
+          ...(req.genre !== undefined ? { genre: req.genre } : {}),
+        }),
+        req.timeoutMs,
+      );
+      const page = this.toPageResult(body);
+      total = page.total;
+      collected.push(...page.items);
+      if (page.items.length < chunk) {
+        break;
+      }
+      offset += page.items.length;
+      remaining -= page.items.length;
     }
-    const body = await this.get<KitsuListResponse>(buildPageUrl(params), req.timeoutMs);
-    return this.toPageResult(body);
+    return { items: collected.slice(0, req.limit), total };
   }
 
   async search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage> {
-    const body = await this.get<KitsuListResponse>(buildSearchUrl(term, limit, skip), timeoutMs);
-    return this.toPageResult(body);
+    // Same stitching as fetchPage: filter[text] search is subject to the same
+    // page[limit] cap, so large limits are sequential <=cap calls.
+    const collected: Anime[] = [];
+    let total = 0;
+    let offset = skip;
+    let remaining = limit;
+    while (remaining > 0) {
+      const chunk = Math.min(remaining, KITSU_MAX_LIMIT);
+      const body = await this.get<KitsuListResponse>(buildSearchUrl(term, chunk, offset), timeoutMs);
+      const page = this.toPageResult(body);
+      total = page.total;
+      collected.push(...page.items);
+      if (page.items.length < chunk) {
+        break;
+      }
+      offset += page.items.length;
+      remaining -= page.items.length;
+    }
+    return { items: collected.slice(0, limit), total };
   }
 
   async fetchById(kitsuId: number, timeoutMs?: number): Promise<Anime | null> {
