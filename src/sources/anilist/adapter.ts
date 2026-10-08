@@ -8,8 +8,8 @@ import { CATALOG_QUERY, META_QUERY, SEARCH_QUERY } from './queries.js';
 import { ANILIST_PER_PAGE } from '../catalog-def.js';
 import type { AnimeSource, PageRequest, SourcePage, SourceId, SortKey } from '../types.js';
 import { normalizeMedia } from '../../normalize/anime.js';
+import { DEFAULT_ANILIST_URL } from '../../config/index.js';
 
-const ANILIST_URL = 'https://graphql.anilist.co';
 const IDS_CHUNK_SIZE = 50; // AniList supports id_in batches of at least this size
 
 // Page query reusing CATALOG_QUERY's media selection, keyed by id_in for
@@ -22,6 +22,7 @@ export interface AniListSourceDeps {
   limiter: TokenBucket;
   log?: Logger;
   titleLang?: 'english' | 'romaji' | 'native';
+  url?: string;
 }
 
 // Catalogue (Page) responses arrive in the standard GraphQL envelope:
@@ -68,6 +69,7 @@ export class AniListSource implements AnimeSource {
   private readonly limiter: TokenBucket;
   private readonly log: Logger | undefined;
   private readonly titleLang: 'english' | 'romaji' | 'native';
+  private readonly url: string;
 
   readonly id: SourceId = 'anilist';
 
@@ -76,6 +78,7 @@ export class AniListSource implements AnimeSource {
     this.limiter = deps.limiter;
     this.log = deps.log;
     this.titleLang = deps.titleLang ?? 'english';
+    this.url = deps.url ?? DEFAULT_ANILIST_URL;
   }
 
   async fetchPage(req: PageRequest): Promise<SourcePage> {
@@ -197,8 +200,8 @@ export class AniListSource implements AnimeSource {
     if (!this.limiter.tryAcquire()) {
       throw new SourceError('rate_limited', 'anilist limiter empty');
     }
-    this.log?.debug('anilist request', { url: ANILIST_URL });
-    const res = await this.http.getJson<T>(ANILIST_URL, {
+    this.log?.debug('anilist request', { url: this.url });
+    const res = await this.http.getJson<T>(this.url, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ query, variables }),

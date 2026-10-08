@@ -47,6 +47,14 @@ describe('AniListSource.fetchPage', () => {
     expect(sent.variables.sort).toEqual(['TRENDING_DESC']); // a LIST, per verified schema
   });
 
+  it('sends requests to the configured url override', async () => {
+    const d = deps([page1]);
+    await new AniListSource({ ...d, url: 'http://127.0.0.1:1' })
+      .fetchPage({ catalogId: 'anime-trending', skip: 0, limit: 10 });
+    const [url] = d._getJson.mock.calls[0]!;
+    expect(url).toBe('http://127.0.0.1:1');
+  });
+
   it('returns normalised Anime items and the page total', async () => {
     const d = deps([page1]);
     const r = await new AniListSource(d).fetchPage({ catalogId: 'anime-trending', skip: 0, limit: 10 });

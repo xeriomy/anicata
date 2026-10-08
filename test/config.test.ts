@@ -43,4 +43,14 @@ describe('loadAppConfig', () => {
   it("keeps the HTTP timeout under Nuvio's 5s meta budget", () => {
     expect(loadAppConfig({ HTTP_TIMEOUT_MS: '99999' }).httpTimeoutMs).toBeLessThanOrEqual(4000);
   });
+  it('defaults ANILIST_URL to the AniList endpoint when absent', () => {
+    expect(loadAppConfig({}).anilistUrl).toBe('https://graphql.anilist.co');
+  });
+  it('returns the ANILIST_URL override when set', () => {
+    expect(loadAppConfig({ ANILIST_URL: 'http://127.0.0.1:1' }).anilistUrl).toBe('http://127.0.0.1:1');
+  });
+  it('falls back to the default for an empty or whitespace-only ANILIST_URL', () => {
+    expect(loadAppConfig({ ANILIST_URL: '' }).anilistUrl).toBe('https://graphql.anilist.co');
+    expect(loadAppConfig({ ANILIST_URL: '   ' }).anilistUrl).toBe('https://graphql.anilist.co');
+  });
 });

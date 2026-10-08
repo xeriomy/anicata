@@ -124,7 +124,7 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
     refillPerMinute: config.anilistRateLimitPerMinute,
   });
   const cache = new TTLCache({ maxEntries: config.cacheMaxEntries });
-  const anilist = new AniListSource({ http, limiter, log });
+  const anilist = new AniListSource({ http, limiter, log, url: config.anilistUrl });
   const kitsu = new KitsuSource({ http, limiter, log });
   const chain = new SourceChain({
     sources: [anilist, kitsu],

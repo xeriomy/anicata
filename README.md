@@ -311,9 +311,23 @@ Environment (see `.env.example` — it matches `loadAppConfig` exactly):
 |---|---|---|
 | `PORT` | `7000` | HTTP port |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `ANILIST_URL` | `https://graphql.anilist.co` | AniList GraphQL endpoint (override for a proxy/staging host, or for fallback testing) |
 | `ANILIST_RATE_LIMIT` | `25` | AniList token-bucket refill, req/min |
 | `HTTP_TIMEOUT_MS` | `3500` | per-request timeout (capped at 4000) |
 | `CACHE_MAX_ENTRIES` | `10000` | in-memory LRU cap |
+
+To exercise the Kitsu fallback deterministically, point `ANILIST_URL` at a
+dead address so AniList fails fast and Kitsu serves with nearly the whole
+budget:
+
+```bash
+ANILIST_URL=http://127.0.0.1:1 npm start
+```
+
+Port 1 refuses the connection instantly (a `network` error, which is
+fallback-eligible), leaving Kitsu almost the entire budget. Blocking the real
+domain instead makes AniList burn its whole timeout and leaves Kitsu only
+~500 ms against its ~600 ms p50 — a far worse test.
 
 ### Live smoke tests
 
