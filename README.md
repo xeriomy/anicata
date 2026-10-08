@@ -225,6 +225,13 @@ Honest list — Phase 2 is a slice, not the whole design:
 - **Kitsu fallback ships; TMDB and AniZip code do not yet.** Logo/backdrop
   enrichment and episode data are Phases 3–4. AniList is the primary upstream,
   Kitsu the fallback.
+- **Kitsu fallback pages are shorter: 40–60 items per catalogue page
+  versus 100 from AniList — permanent, not a bug.** Kitsu caps
+  `page[limit]` at 20 and one 20-item call costs 1.1–1.6 s with no gain
+  from concurrency (measured 2026-10-08), so a full 100-item page (~5–7 s)
+  does not fit the 4.5 s chain budget. The adapter serves what the budget
+  allows and stops early (ADR-017). Pages stay disjoint and Nuvio advances
+  `skip` by `metas.length`, so pagination works — pages are just shorter.
 - **Trending from fallback is most-favorited, not true trending.** During an
   AniList outage the trending catalogue is proxied onto Kitsu
   `sort=-userCount` — a deliberate approximation (see Fallback above).
@@ -288,7 +295,7 @@ Nine design documents in [`docs/`](docs/):
 | [`nuvio-compatibility.md`](docs/nuvio-compatibility.md) | Nuvio client behaviours, verified from its source |
 | [`id-mapping.md`](docs/id-mapping.md) | Cross-source identity design |
 | [`catalog-design.md`](docs/catalog-design.md) | Catalogue plan (15 catalogues by Phase 5) |
-| [`decisions.md`](docs/decisions.md) | 16 Architecture Decision Records (ADRs) |
+| [`decisions.md`](docs/decisions.md) | 17 Architecture Decision Records (ADRs) |
 | [`roadmap.md`](docs/roadmap.md) | Phases 0–8, exit gates, risk register |
 
 ---
@@ -326,8 +333,9 @@ ANILIST_URL=http://127.0.0.1:1 npm start
 
 Port 1 refuses the connection instantly (a `network` error, which is
 fallback-eligible), leaving Kitsu almost the entire budget. Blocking the real
-domain instead makes AniList burn its whole timeout and leaves Kitsu only
-~500 ms against its ~600 ms p50 — a far worse test.
+domain instead is worse: it blackholes, so AniList burns its full timeout and
+Kitsu gets only ~500 ms — not enough for even one 20-item call at the
+measured 1.1–1.6 s.
 
 ### Live smoke tests
 

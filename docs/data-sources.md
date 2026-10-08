@@ -527,12 +527,35 @@ useful for choosing a poster size.
 > *relationship*, i.e. via `include=genres`. Earlier notes claiming "Kitsu has no
 > genres in JSON:API" were wrong.
 
-### 3.5 Pagination ✅
+### 3.5 Pagination ✅ — `page[limit]` caps at **20 (hard)**
 
 `page[limit]` / `page[offset]`, with JSON:API `meta` and `links`
 (`first`/`last`/`next`). Default limit observed: **10**
 (`…&page[limit]=10&page[offset]=0` appears in returned links).
-**Maximum allowed limit is UNVERIFIED** — commonly believed to be 20.
+
+> ✅ **Maximum `page[limit]` is 20 — measured live 2026-10-08, not
+> documentation-derived.** `limit=10 → 200`, `limit=20 → 200`,
+> `limit=21 → 400`, `limit=50 → 400`, `limit=100 → 400`;
+> search `limit=100 → 400` but search `limit=20 → 200`. A single fetch with
+> no limit param (`/anime/1 → 200`) is unaffected. Requests above the cap
+> must be stitched from multiple ≤20-item upstream calls (`KITSU_MAX_LIMIT`
+> in `src/sources/kitsu/adapter.ts`) — never a single call with the full
+> page size. This undocumented cap previously broke the whole fallback
+> (the adapter requested 100, so `fetchPage` and `search` 400'd while only
+> `fetchById` worked); record any future Kitsu limit here before relying
+> on it.
+>
+> ✅ **Page size is latency-bound, not limit-bound.** A 20-item call costs
+> **1.1–1.6 s** measured 2026-10-08, and concurrency does not help (1
+> concurrent: 1.1–1.6 s; 2 concurrent: 2.5 s wall; 3 concurrent: 5.7 s
+> wall; 5 concurrent: 7.1–8.4 s wall — slower than sequential). A full
+> 100-item Nuvio page would cost ~5–7 s against a 4.5 s chain budget, so
+> the adapter fills what the remaining budget allows and stops early
+> rather than starting a call it cannot finish
+> (`KITSU_PER_CALL_RESERVE_MS` in `src/sources/kitsu/adapter.ts`). Observed
+> end to end: **40–60 items per fallback page** against 100 from AniList.
+> Nuvio advances `skip` by `metas.length`, so short pages paginate
+> correctly — they are permanent degradation, not an error.
 
 ### 3.6 Search ✅ (shape)
 

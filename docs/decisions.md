@@ -488,6 +488,44 @@ mode: we are never forced to drop a title because AniList lacks it.
 
 ---
 
+## ADR-017 — Kitsu fallback serves budget-aware partial pages
+
+**Status:** Accepted
+
+**Context.** Kitsu caps `page[limit]` at 20 (measured live 2026-10-08:
+`limit=20 → 200`, `limit=21 → 400`), so one 100-item Nuvio page needs five
+upstream calls. But a single 20-item call costs 1.1–1.6 s, and concurrent
+calls are slower than sequential (5 concurrent measured 7.1–8.4 s wall) —
+so a full 100-item fill costs ~5–7 s against a 4.5 s chain budget and cannot
+reliably complete. A fill cut mid-flight by the deadline loses even the
+items already collected.
+
+**Decision.** Fill sequentially in ≤20-item chunks (`KITSU_MAX_LIMIT` in
+`src/sources/kitsu/adapter.ts`) and stop early once the remaining budget
+cannot fit another call (`KITSU_PER_CALL_RESERVE_MS`, derived from the
+measured single-call latency), serving the partial page. Observed end to
+end: 40–60 items per fallback page against 100 from AniList. Pages stay
+disjoint across `skip` values, and Nuvio advances `skip` by `metas.length`,
+so short pages paginate correctly.
+
+**Alternatives rejected**
+
+| Option | Rejected because |
+|---|---|
+| Flat 20-item pages | Reliable but needlessly poor: when Kitsu answers fast there is budget for more, and throwing it away shrinks every fallback page for no reason. |
+| Parallel fetching | Measured worse than sequential — 5 concurrent calls were slower than 5 sequential ones — so it buys no throughput and adds failure modes. |
+| Attempt the full 100 regardless | Starts a call the budget cannot finish; the deadline cut discards the whole page instead of serving most of it. |
+
+**Consequences**
+
+- ✅ Fallback catalogue and search degrade to shorter pages instead of empty
+  ones during an AniList outage.
+- ⚠ Kitsu fallback pages are permanently 40–60 items, not 100. This is an
+  accepted limitation of Kitsu's latency, not an oversight — see the Phase 2
+  exit gate in `docs/roadmap.md`.
+
+---
+
 ## Decision index
 
 | ADR | Decision | Reversible? |
@@ -508,3 +546,4 @@ mode: we are never forced to drop a title because AniList lacks it.
 | 014 | Batching + 25/min bucket | Easy |
 | 015 | No user context / no tracking | By design, permanent |
 | 016 | `kitsu:` declared, emitted later | Easy |
+| 017 | Kitsu fallback serves budget-aware partial pages | Easy |
