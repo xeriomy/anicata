@@ -14,8 +14,8 @@ database, no user context of any kind. Watch state and lists are Nuvio's job
 (via Trakt / Simkl / MDBList) — this add-on stays out of the way so Nuvio's
 own tracking "just works" (see [The `anilist:` id scheme](#the-anilist-id-scheme)).
 
-> Status: Phase 1 (AniList only). Kitsu fallback, TMDB enrichment, AniZip
-> episodes, genre catalogues and deployment land in Phases 2–8 per
+> Status: Phase 2 (AniList primary, Kitsu fallback). TMDB enrichment, AniZip
+> episodes, genre catalogues and deployment land in Phases 3–8 per
 > [`docs/roadmap.md`](docs/roadmap.md).
 
 ---
@@ -75,36 +75,68 @@ Every id this add-on emits looks like `anilist:21` (see `stremioIdFor` in
   emitting one would resolve the wrong title. Inbound bare numbers are
   rejected with zero upstream calls (`parseMetaId` in `src/addon/meta.ts`).
 - `idPrefixes: ['anilist:', 'kitsu:']` is declared on the manifest and the
-  `meta` resource, so Nuvio only consults us for ids we minted. `kitsu:` ids
-  are declared from day one (ADR-016) but **not emitted** in Phase 1 — the
-  meta handler answers them with a minimal placeholder until the Kitsu source
-  lands in Phase 2.
+  `meta` resource, so Nuvio only consults us for ids we mint. Catalogue rows
+  normally emit `anilist:` ids; rows served from the Kitsu fallback emit
+  `kitsu:` ids (`stremioIdFor` in `src/domain/anime.ts` renders whichever
+  identity the serving source returned). **Both namespaces resolve** through
+  `/meta` (`parseMetaId` in `src/addon/meta.ts`, namespace routing in
+  `SourceChain.fetchById` in `src/sources/chain.ts`).
+
+---
+
+## Fallback: AniList → Kitsu
+
+One ordered chain, built in `src/index.ts`: `SourceChain([anilist, kitsu])`
+with one `CircuitBreaker` per source and a shared `budgetMs` derived from
+`HTTP_TIMEOUT_MS` (clamped ≤ 4000 ms): `min(httpTimeoutMs + 500, 4500)`, which
+stays inside Nuvio's 5000 ms meta budget with 500–1000 ms of headroom for
+serialisation and transit.
+
+- A throwing AniList falls through to Kitsu, as does one that dies by HTTP
+  timeout: the chain budget strictly exceeds the per-attempt timeout, and each
+  attempt is bounded by the deadline's remaining budget (threaded through
+  `PageRequest.timeoutMs` into the adapters' HTTP calls), so a timeout death
+  leaves ~500 ms for the fallback. A source that hangs forever with no inner
+  timeout still exhausts the shared deadline and degrades to empty — still
+  HTTP 200. `429`/`404`/`invalid_request` never fall through (the source
+  answered, so it is healthy — `permitsFallback`
+  in `src/sources/fallback-policy.ts`).
+- **Trending degrades to most-favorited during an AniList outage, and that is a
+  deliberate approximation, not an exact mapping.** Kitsu has no trending sort:
+  `trending`, `recently_popular`, `relevance`, `title` and `favorites` are all
+  rejected with HTTP 400, so the trending catalogue is proxied onto
+  `sort=-userCount` (`kitsuSort` in `src/sources/kitsu/adapter.ts`). A blank
+  trending row reads as broken; an approximately-popular one does not.
+- **Jikan is gone and is not a fallback.** Its public API was discontinued on
+  2026-10-01; there is no Jikan adapter, no Jikan code path, and none planned
+  (see roadmap Phase 2 scope and ADR-004).
+- The no-5xx invariant holds through the chain: a dead primary still yields
+  HTTP 200 on every catalogue, search and meta path (proven by
+  `test/integration.test.ts` → "fallback chain wiring").
 
 ---
 
 ## Architecture
 
-What actually exists in Phase 1 (see `docs/architecture.md` for the full
+What actually exists in Phase 2 (see `docs/architecture.md` for the full
 multi-phase design — several layers there are not built yet):
 
 ```
-Nuvio ──► express + SDK router ──► addon/ ──► services/ ──► sources/anilist
-            src/index.ts            manifest     CatalogService   AniListSource
-                                    catalog      MetaService        (GraphQL)
-                                    meta              │                │
-                                                      ▼                ▼
-                                                  cache/store    normalize/
-                                                  TTLCache        media → Anime
-                                                  (single-flight)      │
-                                                                       ▼
-                                                                    render/
-                                                              Anime → Stremio meta
+Nuvio ──► express + SDK router ──► addon/ ──► services/ ──► SourceChain ──► anilist
+            src/index.ts            manifest     CatalogService       │       (GraphQL)
+                                    catalog      MetaService         │
+                                    meta              │             └─► kitsu
+                                                      ▼               (JSON:API)
+                                                  cache/store
+                                                  TTLCache
+                                                  (single-flight)
 ```
 
 One-line layer summary:
 
 - **`src/index.ts`** — composition root: builds config, HTTP client, limiter,
-  cache, source and services; mounts `public/` (logo), a 24 h
+  cache, the `SourceChain([anilist, kitsu])` with per-source breakers, and
+  services; mounts `public/` (logo), a 24 h
   `Cache-Control` on `/manifest.json`, and the SDK router. Importing it never
   binds a port; only `node dist/index.js` listens.
 
@@ -116,14 +148,18 @@ One-line layer summary:
   tile in Nuvio's add-on list, which is exactly the bug that shipped once.
 - **`src/addon/`** — protocol layer only: manifest builder (+ 8 KB size
   assertion), catalog handler (parses `skip`/`search` extras), meta handler
-  (parses `anilist:<id>`, never returns non-200).
+  (parses `anilist:<id>` and `kitsu:<id>`, never returns non-200).
 - **`src/services/`** — orchestration: page stitching, search, meta lookup,
   and the cache/error policies (empty → short cache, failure → valid empty
   body, never 5xx).
-- **`src/sources/anilist/`** — the only upstream adapter: GraphQL documents,
-  response types, and `AniListSource` (`fetchCatalogPage`, `search`,
-  `fetchById`/`fetchByIds`). Translates into our domain, never exposes
-  AniList shapes upward.
+- **`src/sources/anilist/`** — primary upstream adapter: GraphQL documents,
+  response types, and `AniListSource` (`fetchPage`, `search`, `fetchById`).
+  Translates into our domain, never exposes AniList shapes upward.
+- **`src/sources/kitsu/`** — fallback upstream adapter: JSON:API types, URL
+  builders, and `KitsuSource` (same `AnimeSource` port; trending proxied onto
+  `sort=-userCount`, see Fallback above).
+- **`src/sources/chain.ts`** — `SourceChain`: ordered sources, per-source
+  breakers, shared deadline, sticky fallback, namespace-routed `fetchById`.
 - **`src/domain/`** — our own `Anime` / `AnimeIdentity` types plus
   `stremioIdFor`. Depends on nothing.
 - **`src/normalize/`** — AniList `Media` → `Anime` (status/format mapping,
@@ -145,15 +181,15 @@ backs every cache key, with single-flight de-duplication so concurrent misses
 share one upstream request. HTTP responses also carry `Cache-Control`
 (`cacheMaxAge`), which Nuvio's OkHttp disk cache honours:
 
-| Layer | Key / header | TTL (fresh) | Stale grace | Status in Phase 1 |
+| Layer | Key / header | TTL (fresh) | Stale grace | Status in Phase 2 |
 |---|---|---|---|---|
 | Response `Cache-Control` | per resource (see below) | varies | — (stale is served server-side by `TTLCache`) | ✅ implemented |
-| Page cache | `catalog:{id}:{genre}:{skip}` | 15 min | 6 h | ✅ implemented |
-| Search cache | `search:{term}:{skip}` | 30 min | 6 h | ✅ implemented |
-| Meta cache | `meta:anilist:{id}` | **7 d** | **30 d** | ✅ implemented |
-| Negative meta cache | `meta:anilist:{id}` → `null` | 60 s | — | ✅ implemented |
+| Page cache | `catalog:{source}:{id}:{genre}:{skip}` | 15 min | 6 h | ✅ implemented |
+| Search cache | `search:{source}:{term}:{skip}` | 30 min | 6 h | ✅ implemented |
+| Meta cache | `meta:{anilist\|kitsu}:{id}` | **7 d** | **30 d** | ✅ implemented |
+| Negative meta cache | `meta:{anilist\|kitsu}:{id}` → `null` | 60 s | — | ✅ implemented |
 | Identity cache (`resolve:{ns}:{value}`, 30 d) | — | — | — | ❌ designed, lands Phase 3 |
-| Raw-source cache (upstream URL, 10 min) | — | — | — | ❌ designed, lands Phase 2 |
+| Raw-source cache (upstream URL, 10 min) | — | — | — | ❌ designed, unplanned (deferred; no phase assigned) |
 
 Response `cacheMaxAge` values (numeric `max-age` on the wire, from the services
 and `src/index.ts`):
@@ -181,14 +217,24 @@ pre-launch action item (`docs/data-sources.md` §1.2). Details and evidence:
 
 ## Known limitations
 
-Honest list — Phase 1 is a slice, not the whole design:
+Honest list — Phase 2 is a slice, not the whole design:
 
-- **Jikan is unreachable and therefore disabled.** Its API host
-  (`api.jikan.moe`) timed out at TCP level on repeated attempts during
-  research while AniList, Kitsu, AniZip and TMDB all responded. No Jikan
-  adapter ships in Phase 1; it lands (opt-in) in Phase 2.
-- **No Kitsu, TMDB or AniZip code yet.** Fallback chain, logo/backdrop
-  enrichment and episode data are Phases 2–4. AniList is the single upstream.
+- **Jikan is gone.** Its public API was discontinued on 2026-10-01. There is
+  no Jikan adapter, no Jikan code path, and none planned — it is not a Phase 2
+  fallback and never will be (see roadmap Phase 2 scope and ADR-004).
+- **Kitsu fallback ships; TMDB and AniZip code do not yet.** Logo/backdrop
+  enrichment and episode data are Phases 3–4. AniList is the primary upstream,
+  Kitsu the fallback.
+- **Kitsu fallback pages are shorter: 40–60 items per catalogue page
+  versus 100 from AniList — permanent, not a bug.** Kitsu caps
+  `page[limit]` at 20 and one 20-item call costs 1.1–1.6 s with no gain
+  from concurrency (measured 2026-10-08), so a full 100-item page (~5–7 s)
+  does not fit the 4.5 s chain budget. The adapter serves what the budget
+  allows and stops early (ADR-017). Pages stay disjoint and Nuvio advances
+  `skip` by `metas.length`, so pagination works — pages are just shorter.
+- **Trending from fallback is most-favorited, not true trending.** During an
+  AniList outage the trending catalogue is proxied onto Kitsu
+  `sort=-userCount` — a deliberate approximation (see Fallback above).
 - **`videos[]` is always empty.** No episode list until AniZip lands (Phase 4);
   Nuvio renders a clean details page without it.
 - **Trakt library / watch progress will not work — this is structural, not a
@@ -249,7 +295,7 @@ Nine design documents in [`docs/`](docs/):
 | [`nuvio-compatibility.md`](docs/nuvio-compatibility.md) | Nuvio client behaviours, verified from its source |
 | [`id-mapping.md`](docs/id-mapping.md) | Cross-source identity design |
 | [`catalog-design.md`](docs/catalog-design.md) | Catalogue plan (15 catalogues by Phase 5) |
-| [`decisions.md`](docs/decisions.md) | 16 Architecture Decision Records (ADRs) |
+| [`decisions.md`](docs/decisions.md) | 17 Architecture Decision Records (ADRs) |
 | [`roadmap.md`](docs/roadmap.md) | Phases 0–8, exit gates, risk register |
 
 ---
@@ -272,24 +318,43 @@ Environment (see `.env.example` — it matches `loadAppConfig` exactly):
 |---|---|---|
 | `PORT` | `7000` | HTTP port |
 | `LOG_LEVEL` | `info` | `debug` \| `info` \| `warn` \| `error` |
+| `ANILIST_URL` | `https://graphql.anilist.co` | AniList GraphQL endpoint (override for a proxy/staging host, or for fallback testing) |
 | `ANILIST_RATE_LIMIT` | `25` | AniList token-bucket refill, req/min |
 | `HTTP_TIMEOUT_MS` | `3500` | per-request timeout (capped at 4000) |
 | `CACHE_MAX_ENTRIES` | `10000` | in-memory LRU cap |
 
-### Live smoke test
+To exercise the Kitsu fallback deterministically, point `ANILIST_URL` at a
+dead address so AniList fails fast and Kitsu serves with nearly the whole
+budget:
+
+```bash
+ANILIST_URL=http://127.0.0.1:1 npm start
+```
+
+Port 1 refuses the connection instantly (a `network` error, which is
+fallback-eligible), leaving Kitsu almost the entire budget. Blocking the real
+domain instead is worse: it blackholes, so AniList burns its full timeout and
+Kitsu gets only ~500 ms — not enough for even one 20-item call at the
+measured 1.1–1.6 s.
+
+### Live smoke tests
 
 `test/live/anilist.live.test.ts` hits the real AniList API (~4 requests —
 well under the 30 req/min limit; do not add more, and do not run it more
 often than needed). It verifies a catalogue page (and the perPage→50 clamp),
 `fetchById(21)` → One Piece (AniList 21 / MAL 21), `fetchById(99999999)` →
-`null`, and reports the current `x-ratelimit-limit`. Skipped unless
-`ANICATA_LIVE=1`:
+`null`, and reports the current `x-ratelimit-limit`.
+`test/live/kitsu.live.test.ts` hits the real Kitsu API (2 requests): a parsed
+trending page via the `-userCount` proxy, and a `filter[text]=` search.
+Combined the live suite makes roughly 8 requests. Both files are skipped
+unless `ANICATA_LIVE=1`:
 
 ```bash
 ANICATA_LIVE=1 npm run test:live   # opt-in; needs network
 npx vitest run                     # live suite skips, default suite stays offline
 ```
 
-> As of 2026-10-04 the `99999999` case **fails live** (HTTP 404 throw vs
-> expected `null`) — see Known limitations. The other three pass and the
-> observed `x-ratelimit-limit` is `30`.
+> Last live run 2026-10-07: all 6 tests passed (4 AniList + 2 Kitsu);
+> observed AniList `x-ratelimit-limit` is `30`. (The old 2026-10-04 note about
+> the `99999999` case failing live is withdrawn — the 404→`null` mapping
+> shipped in Phase 1 and the case passes.)

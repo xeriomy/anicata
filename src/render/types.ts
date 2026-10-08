@@ -4,6 +4,15 @@ import type { MetaPreview, MetaDetail } from 'stremio-addon-sdk';
 export interface StremioMetaPreview extends MetaPreview {
   banner?: string;
   landscapePoster?: string;
+  /**
+   * Emitted by `renderPreview` but declared on the SDK's `MetaDetail`, not
+   * `MetaPreview`. Re-declared here so the catalog return type describes what
+   * the renderer actually produces.
+   */
+  releaseInfo?: string | undefined;
+  released?: string | undefined;
+  imdbRating?: string | undefined;
+  genres?: string[];
 }
 
 /**

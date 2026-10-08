@@ -71,7 +71,7 @@ export interface AniListMedia {
   source: string | null;
   countryOfOrigin: string | null;
   hashtag: string | null;
-  startDate: AniListFuzzyDate;
+  startDate: AniListFuzzyDate | null;
   endDate: AniListFuzzyDate;
   season: string | null;
   seasonYear: number | null;

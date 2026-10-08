@@ -48,7 +48,7 @@ const anime: Anime = {
 function fakeService(overrides: {
   getCatalogPage?: (args: { catalogId: string; type: string; genre?: string; skip: number }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
   search?: (args: { term: string; skip: number }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
-}): CatalogService {
+} = {}): CatalogService {
   return {
     getCatalogPage: vi.fn(async () => ({ items: [], cacheMaxAge: 60, freshness: 'fresh' as const })),
     search: vi.fn(async () => ({ items: [], cacheMaxAge: 60, freshness: 'fresh' as const })),
@@ -130,10 +130,10 @@ describe('parseMetaId', () => {
 });
 
 function fakeMetaService(overrides?: {
-  getByAnilistId?: (id: number) => Promise<MetaResult>;
+  getById?: (id: string) => Promise<MetaResult>;
 }): MetaService {
   return {
-    getByAnilistId: vi.fn(async () => ({ anime: null, cacheMaxAge: 60, freshness: 'fresh' as const })),
+    getById: vi.fn(async () => ({ anime: null, cacheMaxAge: 60, freshness: 'fresh' as const })),
     ...overrides,
   } as unknown as MetaService;
 }
@@ -145,43 +145,62 @@ describe('createMetaHandler', () => {
     const res = await handler({ type: 'anime', id: '21' });
     expect(res.meta).toMatchObject({ id: '21', type: 'anime', name: 'Unavailable' });
     expect(res.cacheMaxAge).toBe(60);
-    expect((service.getByAnilistId as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
+    expect((service.getById as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
   });
 
-  it('returns Unavailable with cacheMaxAge 60 without calling the service for kitsu: ids', async () => {
-    const service = fakeMetaService();
+  it('resolves kitsu: ids via the service', async () => {
+    const kitsuAnime: Anime = {
+      identity: { kitsu: 12 },
+      title: { synonyms: [] },
+      displayTitle: 'KITSU TITLE',
+      format: 'TV',
+      status: 'FINISHED',
+      type: 'anime',
+      genres: [],
+      tags: [],
+      studios: [],
+      relations: [],
+      images: {},
+      hashtags: [],
+    };
+    const service = fakeMetaService({
+      getById: vi.fn(async (id: string) =>
+        id === 'kitsu:12'
+          ? { anime: kitsuAnime, cacheMaxAge: 604800, freshness: 'fresh' as const }
+          : { anime: null, cacheMaxAge: 60, freshness: 'fresh' as const }),
+    });
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: 'kitsu:12' });
-    expect(res.meta).toMatchObject({ id: 'kitsu:12', type: 'anime', name: 'Unavailable' });
-    expect(res.cacheMaxAge).toBe(60);
-    expect((service.getByAnilistId as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
+    expect(service.getById as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith('kitsu:12');
+    expect(res.meta).toMatchObject({ id: 'kitsu:12', type: 'anime', name: 'KITSU TITLE' });
+    expect(res.cacheMaxAge).toBe(604800);
   });
 
   it('returns Unavailable with cacheMaxAge 60 when the anime is unknown', async () => {
     const service = fakeMetaService({
-      getByAnilistId: vi.fn(async () => ({ anime: null, cacheMaxAge: 60, freshness: 'fresh' as const })),
+      getById: vi.fn(async () => ({ anime: null, cacheMaxAge: 60, freshness: 'fresh' as const })),
     });
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: 'anilist:999999' });
-    expect(service.getByAnilistId as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith(999999);
+    expect(service.getById as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith('anilist:999999');
     expect(res.meta).toMatchObject({ id: 'anilist:999999', type: 'anime', name: 'Unavailable' });
     expect(res.cacheMaxAge).toBe(60);
   });
 
   it('returns renderDetail output with the service cacheMaxAge on a hit', async () => {
     const service = fakeMetaService({
-      getByAnilistId: vi.fn(async () => ({ anime, cacheMaxAge: 604800, freshness: 'fresh' as const })),
+      getById: vi.fn(async () => ({ anime, cacheMaxAge: 604800, freshness: 'fresh' as const })),
     });
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: 'anilist:21' });
-    expect(service.getByAnilistId as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith(21);
+    expect(service.getById as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith('anilist:21');
     expect(res.meta).toMatchObject({ id: 'anilist:21', type: 'anime', name: 'ONE PIECE' });
     expect(res.cacheMaxAge).toBe(604800);
   });
 
   it('never throws: returns Unavailable with cacheMaxAge 10 when the service fails', async () => {
     const service = fakeMetaService({
-      getByAnilistId: vi.fn(async () => { throw new Error('upstream down'); }),
+      getById: vi.fn(async () => { throw new Error('upstream down'); }),
     });
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: 'anilist:21' });

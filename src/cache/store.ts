@@ -35,6 +35,7 @@ export class TTLCache {
   private readonly now: () => number;
   private readonly entries = new Map<string, StoredEntry>();
   private readonly inflight = new Map<string, Promise<{ value: unknown; freshness: Freshness }>>();
+  private readonly pending = new Map<string, Promise<unknown>>();
   private hits = 0;
   private misses = 0;
   private staleHits = 0;
@@ -114,6 +115,28 @@ export class TTLCache {
 
   stats(): CacheStats {
     return { hits: this.hits, misses: this.misses, stale: this.staleHits };
+  }
+
+  /**
+   * Runs `fn` at most once per `key` among concurrent callers: the first
+   * caller runs it, the rest await the same promise. Unlike `wrap`, nothing is
+   * stored under `key` — it is only the rendezvous, so callers whose stored
+   * key is decided by the loader's own result (e.g. the serving source) can
+   * still share one flight. A rejection is passed to every waiter and never
+   * cached, so the next call retries.
+   */
+  async dedupe<T>(key: string, fn: () => Promise<T>): Promise<T> {
+    const existing = this.pending.get(key);
+    if (existing !== undefined) {
+      return (await existing) as T;
+    }
+    const task: Promise<T> = fn();
+    this.pending.set(key, task);
+    try {
+      return await task;
+    } finally {
+      this.pending.delete(key);
+    }
   }
 
   clear(): void {

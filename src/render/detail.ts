@@ -42,11 +42,21 @@ export function renderDetail(a: Anime): StremioMetaDetail {
     hashtags: a.hashtags,
     awards: undefined,
     links: [
-      {
-        name: 'AniList',
-        category: 'AniList',
-        url: `https://anilist.co/anime/${a.identity.anilist}`,
-      },
+      ...(a.identity.anilist !== undefined
+        ? [
+            {
+              name: 'AniList',
+              category: 'AniList',
+              url: `https://anilist.co/anime/${a.identity.anilist}`,
+            },
+          ]
+        : [
+            {
+              name: 'Kitsu',
+              category: 'Kitsu',
+              url: `https://kitsu.io/anime/${a.identity.kitsu}`,
+            },
+          ]),
       ...(a.identity.mal != null
         ? [
             {

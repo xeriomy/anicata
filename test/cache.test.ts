@@ -61,4 +61,36 @@ describe('TTLCache', () => {
     expect(c.get('b')).toBeUndefined();
     expect(c.get('a')).toBeDefined();
   });
+
+  it('dedupe: concurrent callers share one flight and each get the value', async () => {
+    const c = new TTLCache();
+    const fn = vi.fn(async () => {
+      await new Promise((r) => setTimeout(r, 10));
+      return 'v';
+    });
+    const results = await Promise.all(Array.from({ length: 10 }, () => c.dedupe('k', fn)));
+    expect(results).toEqual(Array(10).fill('v'));
+    expect(fn).toHaveBeenCalledTimes(1);
+  });
+
+  it('dedupe: a rejection reaches every waiter and the next call retries', async () => {
+    const c = new TTLCache();
+    const fn = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('upstream down'))
+      .mockResolvedValue('recovered');
+    await expect(
+      Promise.all([c.dedupe('k', fn), c.dedupe('k', fn)]),
+    ).rejects.toThrow('upstream down');
+    expect(fn).toHaveBeenCalledTimes(1);
+    await expect(c.dedupe('k', fn)).resolves.toBe('recovered');
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
+
+  it('dedupe: separate keys run separately', async () => {
+    const c = new TTLCache();
+    const fn = vi.fn(async () => 'v');
+    await Promise.all([c.dedupe('a', fn), c.dedupe('b', fn)]);
+    expect(fn).toHaveBeenCalledTimes(2);
+  });
 });

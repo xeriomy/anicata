@@ -97,16 +97,48 @@ disk cache, deployment config.
 
 ### Exit gate
 
-- [ ] Both adapters pass the same contract test suite (AniList, Kitsu)
+- [ ] Both adapters pass the same contract test suite (AniList, Kitsu) —
+      OPEN: `test/source-port.test.ts` covers AniList only; no shared contract
+      suite runs Kitsu through the same assertions yet.
 - [x] Jikan removed from the chain → **zero** impact by construction ✅
       The service is discontinued, so nothing can call it. Gate satisfied by
       deletion rather than by a resilience mechanism.
-- [ ] AniList 500 → Kitsu-sourced catalogue, comparable item count
-- [ ] AniList 429 → **stale served, zero fallback calls** (assert with a spy)
-- [ ] AniList + Kitsu down → stale (up to 24 h), never 5xx
-- [ ] Empty result → **zero** fallback calls
-- [ ] Every adapter maps to identical `Anime` for equivalent input (snapshot)
-- [ ] Every response still 200, still ≤ 5 s
+- [ ] AniList 500 → Kitsu-sourced catalogue, shorter pages — OPEN (count gap
+      is inherent, not a bug): the path is now proven end to end against the
+      live APIs — HTTP 200, non-empty, `kitsu:` ids, disjoint pages across
+      `skip` values (`KITSU_MAX_LIMIT` stitching in
+      `src/sources/kitsu/adapter.ts`; `ANILIST_URL=http://127.0.0.1:1` makes
+      AniList fail fast so the fallback gets the whole budget). What is NOT
+      met is the original "comparable item count": repeated end-to-end runs
+      yield **40–60 items per fallback page against 100 from AniList**.
+      The gap cannot be closed — a 20-item Kitsu call costs 1.1–1.6 s and
+      concurrency is slower than sequential (measured 2026-10-08), so a full
+      100-item page (~5–7 s) does not fit the 4.5 s chain budget. Nuvio
+      advances `skip` by `metas.length`, so short pages paginate correctly.
+- [x] AniList 429 → **stale served, zero fallback calls** ✅ proven in two
+      halves 2026-10-07: `test/chain.test.ts` "primary 429 → throws the
+      rate_limited error, fallback spy shows 0 calls" (spy), and
+      `test/catalog-service.test.ts` "serves stale from the cache when the
+      source throws" (stale served on failure; the service path is
+      error-kind-agnostic once a stale entry exists).
+- [ ] AniList + Kitsu down → stale (up to **6 h**), never 5xx — duration claim
+      CORRECTED 2026-10-07: this gate originally said 24 h, which was wrong. 24 h is the
+      manifest cache (`manifest 86 400`); the catalogue stale window is 6 h
+      (`CATALOG_STALE_MS = 6 * 60 * 60 * 1000`). Left unticked because never-5xx is proven
+      (integration "never returns a non-200" with both services throwing, plus the
+      throwing-chain test) and stale-on-failure is proven at service level, but no single test
+      demonstrates the full composition — both sources down, a stale entry present, HTTP 200 —
+      which is what this gate actually asks for.
+- [x] Empty result → **zero** fallback calls ✅ proven 2026-10-07:
+      `test/chain.test.ts` "primary returns empty → success, 0 fallback calls".
+- [ ] Every adapter maps to identical `Anime` for equivalent input (snapshot) —
+      OPEN: no snapshot test exists.
+- [ ] Every response still 200, still ≤ 5 s — OPEN: 200 is proven on every
+      path with the chain in place (integration "fallback chain wiring" plus
+      "never returns a non-200"), and `test/integration.test.ts` proves a
+      hanging primary still answers inside `httpTimeoutMs` (≤ 4000 ms) on the
+      catalogue and meta paths — but search/warm-path timing and live-adapter
+      end-to-end timing were never measured.
 
 ---
 
@@ -229,7 +261,12 @@ disk cache, deployment config.
 - [ ] AniList / Kitsu / AniZip reachable and returning expected shapes
 - [ ] AniList `perPage` maximum confirmed ✅ (already verified in research: 50)
 - [ ] AniList current rate limit re-confirmed
-- [ ] Kitsu rate-limit behaviour observed and self-limiter tuned
+- [ ] Kitsu rate-limit behaviour observed and self-limiter tuned — HALF OPEN:
+      pacing is now measured 2026-10-08 and recorded (`docs/data-sources.md`
+      §3.1/§3.5): Kitsu advertises **no rate-limit headers**, a 20-item page
+      costs **1.1–1.6 s**, and concurrency does not help (5 concurrent calls
+      slower than 5 sequential). What remains open is the second half —
+      tuning our own self-limiter against those numbers has not been done.
 
 ### On-device (manual, real Nuvio)
 - [x] Install from a URL ✅ **verified on device 2026-10-05**

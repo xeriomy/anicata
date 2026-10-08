@@ -7,6 +7,7 @@ export interface RequestConfig {
 export interface AppConfig {
   port: number;
   logLevel: 'debug' | 'info' | 'warn' | 'error';
+  anilistUrl: string;
   anilistRateLimitPerMinute: number;
   httpTimeoutMs: number;
   cacheMaxEntries: number;
@@ -14,6 +15,11 @@ export interface AppConfig {
 
 const TITLE_LANGS: readonly TitleLang[] = ['english', 'romaji', 'native'];
 const LOG_LEVELS: readonly AppConfig['logLevel'][] = ['debug', 'info', 'warn', 'error'];
+
+// Single home for the AniList endpoint default. The adapter imports this
+// rather than defining its own literal, so the default exists in exactly one
+// place (no circular import: this module imports nothing).
+export const DEFAULT_ANILIST_URL = 'https://graphql.anilist.co';
 
 function readInt(env: NodeJS.ProcessEnv, key: string, fallback: number): number {
   const raw = env[key];
@@ -35,10 +41,18 @@ function readEnum<T extends string>(
   return found ?? fallback;
 }
 
+function readString(env: NodeJS.ProcessEnv, key: string, fallback: string): string {
+  const raw = env[key];
+  if (raw === undefined) return fallback;
+  if (raw.trim() === '') return fallback;
+  return raw;
+}
+
 export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
   return {
     port: readInt(env, 'PORT', 7000),
     logLevel: readEnum(env, 'LOG_LEVEL', LOG_LEVELS, 'info'),
+    anilistUrl: readString(env, 'ANILIST_URL', DEFAULT_ANILIST_URL),
     anilistRateLimitPerMinute: readInt(env, 'ANILIST_RATE_LIMIT', 25),
     httpTimeoutMs: Math.min(readInt(env, 'HTTP_TIMEOUT_MS', 3500), 4000),
     cacheMaxEntries: readInt(env, 'CACHE_MAX_ENTRIES', 10000),

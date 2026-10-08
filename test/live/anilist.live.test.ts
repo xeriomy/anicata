@@ -15,12 +15,12 @@ live('AniList live smoke', () => {
       limiter: new TokenBucket({ capacity: 20, refillPerMinute: 20 }),
     });
 
-  it('serves a catalogue page and clamps perPage to 50', async () => {
-    // AniList silently clamps perPage to 50, so asking for 100 still yields
-    // at most 50 items in one request.
-    const r = await mk().fetchCatalogPage({ sort: ['TRENDING_DESC'], page: 1, perPage: 100 });
-    expect(r.items.length).toBeGreaterThan(0);
-    expect(r.items.length).toBeLessThanOrEqual(50);
+  it('serves a 100-item catalogue page via two 50-per-page requests', async () => {
+    // AniList silently clamps perPage to 50, so a 100-item Nuvio page costs
+    // two upstream requests. Getting 100 items back proves the adapter
+    // stitches both pages.
+    const r = await mk().fetchPage({ catalogId: 'anime-trending', skip: 0, limit: 100 });
+    expect(r.items.length).toBe(100);
     expect(r.items[0]!.identity.anilist).toBeTypeOf('number');
     expect(r.items[0]!.displayTitle.trim()).not.toBe('');
   }, 20_000);

@@ -61,10 +61,7 @@ export function createMetaHandler(deps: {
       if (parsed === null) {
         return { meta: minimalMeta(args), cacheMaxAge: 60 };
       }
-      if (parsed.namespace === 'kitsu') {
-        return { meta: minimalMeta(args), cacheMaxAge: 60 };
-      }
-      const result = await deps.metaService.getByAnilistId(Number(parsed.value));
+      const result = await deps.metaService.getById(`${parsed.namespace}:${parsed.value}`);
       if (result.anime === null) {
         return { meta: minimalMeta(args), cacheMaxAge: 60 };
       }
