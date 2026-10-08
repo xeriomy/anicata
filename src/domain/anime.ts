@@ -35,19 +35,28 @@ export interface IdentityNamespaceDef {
   readonly emits: boolean;
   readonly shape: 'scalar' | 'object';
   readonly value: 'number' | 'string';
+  // Task 2 parse seam: whether `parseIncomingId` accepts this prefix inbound
+  // (spec §4: the six inbound forms only — anidb/tvdb/simkl are carried, not
+  // indexed, with no inbound form in scope), and how its value
+  // validates/normalizes. `ids.ts` branches on this column, never on `key`,
+  // so a new namespace stays one registry row. `digits` = bare digits only;
+  // `ttid` = IMDb-style `tt…` (bare `tt` form accepted, `tt` prepended when
+  // absent, always emitted lowercase).
+  readonly inbound: boolean;
+  readonly parse: 'digits' | 'ttid';
 }
 
 export const IDENTITY_NAMESPACE_REGISTRY: readonly IdentityNamespaceDef[] = [
-  { key: 'anilist', prefix: 'anilist:', emits: true, shape: 'scalar', value: 'number' },
-  { key: 'kitsu', prefix: 'kitsu:', emits: true, shape: 'scalar', value: 'string' },
-  { key: 'mal', prefix: 'mal:', emits: false, shape: 'scalar', value: 'number' },
-  { key: 'anidb', prefix: 'anidb:', emits: false, shape: 'scalar', value: 'number' },
+  { key: 'anilist', prefix: 'anilist:', emits: true, shape: 'scalar', value: 'number', inbound: true, parse: 'digits' },
+  { key: 'kitsu', prefix: 'kitsu:', emits: true, shape: 'scalar', value: 'string', inbound: true, parse: 'digits' },
+  { key: 'mal', prefix: 'mal:', emits: false, shape: 'scalar', value: 'number', inbound: true, parse: 'digits' },
+  { key: 'anidb', prefix: 'anidb:', emits: false, shape: 'scalar', value: 'number', inbound: false, parse: 'digits' },
   // Object shape: Fribb `{tv, movie}` form; bare upstream strings fold into it.
-  { key: 'tmdb', prefix: 'tmdb:', emits: false, shape: 'object', value: 'number' },
+  { key: 'tmdb', prefix: 'tmdb:', emits: false, shape: 'object', value: 'number', inbound: true, parse: 'digits' },
   // `tt…` strings with prefix; first element on multi rows.
-  { key: 'imdb', prefix: 'imdb:', emits: false, shape: 'scalar', value: 'string' },
-  { key: 'tvdb', prefix: 'tvdb:', emits: false, shape: 'scalar', value: 'number' },
-  { key: 'simkl', prefix: 'simkl:', emits: false, shape: 'scalar', value: 'number' },
+  { key: 'imdb', prefix: 'imdb:', emits: false, shape: 'scalar', value: 'string', inbound: true, parse: 'ttid' },
+  { key: 'tvdb', prefix: 'tvdb:', emits: false, shape: 'scalar', value: 'number', inbound: false, parse: 'digits' },
+  { key: 'simkl', prefix: 'simkl:', emits: false, shape: 'scalar', value: 'number', inbound: false, parse: 'digits' },
 ];
 
 export type AnimeIdentity =
