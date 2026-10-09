@@ -158,13 +158,22 @@ async function resolveFromKitsuForward(
 
   const url = buildKitsuForwardUrl(parsed);
 
-  const result = await http.getJson<KitsuMapping[]>(url.toString(), {
-    timeoutMs: Math.min(KITSU_TIER_CAP_MS, remainingBudget),
-    headers: {
-      'Accept': 'application/vnd.api+json',
-      'User-Agent': 'anicata-resolver/1.0',
-    },
-  });
+  let result: { data: KitsuMapping[] };
+  try {
+    result = await http.getJson<KitsuMapping[]>(url.toString(), {
+      timeoutMs: Math.min(KITSU_TIER_CAP_MS, remainingBudget),
+      headers: {
+        'Accept': 'application/vnd.api+json',
+        'User-Agent': 'anicata-resolver/1.0',
+      },
+    });
+  } catch {
+    // Same contract as every other tier: a failure degrades to a miss and never
+    // propagates out of the identity path. Without this, one upstream hiccup
+    // escapes `resolveToCanonical` and turns a resolvable meta into a 200-empty
+    // placeholder with a 10 s cache.
+    return null;
+  }
 
   // HTTP errors are thrown by HttpClient; only 200 reaches here.
   // A 400-style body (e.g. `include=anime`) arrives without a `data` array —
@@ -219,13 +228,23 @@ async function resolveFromKitsuReverse(
 
   const url = buildKitsuReverseUrl(kitsuId);
 
-  const { data: reverseData } = await http.getJson<KitsuReverseMapping[]>(url.toString(), {
-    timeoutMs: Math.min(KITSU_TIER_CAP_MS, remainingBudget),
-    headers: {
-      'Accept': 'application/vnd.api+json',
-      'User-Agent': 'anicata-resolver/1.0',
-    },
-  });
+  let reverseData: KitsuReverseMapping[];
+  try {
+    reverseData = (
+      await http.getJson<KitsuReverseMapping[]>(url.toString(), {
+        timeoutMs: Math.min(KITSU_TIER_CAP_MS, remainingBudget),
+        headers: {
+          'Accept': 'application/vnd.api+json',
+          'User-Agent': 'anicata-resolver/1.0',
+        },
+      })
+    ).data;
+  } catch {
+    // Every tier degrades to a miss rather than propagating (see the forward
+    // tier for why: an escaping error turns a resolvable meta into a
+    // 200-empty placeholder with a 10 s cache).
+    return null;
+  }
 
   // HTTP 200 with data; status check done by HttpClient
 

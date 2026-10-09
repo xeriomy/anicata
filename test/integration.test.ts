@@ -5,6 +5,8 @@ import type { Anime } from '../src/domain/anime.js';
 import { loadAppConfig } from '../src/config/index.js';
 import { CircuitBreaker } from '../src/net/breaker.js';
 import { SourceChain } from '../src/sources/chain.js';
+import { createEmptyBundle } from '../src/identity/bundle.js';
+import { ResolveService } from '../src/services/resolve.service.js';
 import type { AnimeSource, SourcePage } from '../src/sources/types.js';
 
 const fake = (id: number, over: Partial<Anime> = {}): Anime => ({
@@ -32,6 +34,13 @@ const app = createApp({
   metaService: { getById: async (id: string) =>
     id === 'anilist:21' ? { anime: fake(21, { countryOfOrigin: 'JP' }), cacheMaxAge: 604800, freshness: 'fresh' }
                         : { anime: null, cacheMaxAge: 60, freshness: 'fresh' } } as never,
+  // Empty bundle: this suite is about chain fallback, not identity resolution.
+  // The real artefact would translate `kitsu:1` to its real AniList id and the
+  // fixtures below would no longer match (that is exactly how T11 broke it).
+  resolveService: new ResolveService({
+    http: {} as never,
+    bundle: createEmptyBundle(),
+  }),
 });
 
 describe('GET /manifest.json', () => {
@@ -171,6 +180,7 @@ describe('never returns a non-200', () => {
     // the suite's stated invariant is that `npm test` never touches the network,
     // and a network-dependent test can fail for reasons unrelated to our code.
     const broken = createApp({
+      resolveService: new ResolveService({ http: {} as never, bundle: createEmptyBundle() }),
       catalogService: { getCatalogPage: async () => { throw new Error('boom'); },
                         search: async () => { throw new Error('boom'); } } as never,
       metaService: { getById: async () => { throw new Error('boom'); } } as never,
@@ -191,6 +201,7 @@ describe('never returns a non-200', () => {
     // silently skip this add-on and fall through to TMDB. Proved here rather than
     // inferred, because the catalogue test above cannot reach it.
     const broken = createApp({
+      resolveService: new ResolveService({ http: {} as never, bundle: createEmptyBundle() }),
       metaService: { getById: async () => { throw new Error('boom'); } } as never,
     });
     for (const path of ['/meta/anime/anilist%3A21.json', '/meta/anime/21.json',
@@ -263,7 +274,10 @@ describe('fallback chain wiring (Phase 2)', () => {
     // CatalogService and MetaService run over a chain whose primary throws on
     // every method. Content assertions (not just status) prove the fallback
     // served: degrade-to-empty would also be 200.
-    const app = createApp({ chain: injectedChain(throwingPrimary()) });
+    const app = createApp({
+      chain: injectedChain(throwingPrimary()),
+      resolveService: new ResolveService({ http: {} as never, bundle: createEmptyBundle() }),
+    });
     for (const path of ['/catalog/anime/anime-trending.json',
                         '/catalog/anime/anime-top-rated.json',
                         '/catalog/anime/anime-search/search=bebop.json',

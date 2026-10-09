@@ -14,6 +14,25 @@ export interface BundleIndices {
   rowCount: number; // total rows in the artefact
 }
 
+/**
+ * An empty bundle: every index present, every lookup a miss.
+ *
+ * Production wiring never needs this — a missing artefact already degrades to
+ * an empty index. It exists so a test can assert chain fallback or handler
+ * behaviour *without* the real 32,381 rows translating ids underneath it,
+ * which is how the Phase 2 integration suite broke when T11 shipped.
+ */
+export function createEmptyBundle(): BundleIndices {
+  return {
+    byAnilist: new Map<number, TrimmedIdentityRow>(),
+    byMal: new Map<number, TrimmedIdentityRow>(),
+    byKitsu: new Map<number, TrimmedIdentityRow>(),
+    byTmdb: new Map<number, TrimmedIdentityRow>(),
+    byImdb: new Map<string, TrimmedIdentityRow>(),
+    rowCount: 0,
+  };
+}
+
 export function loadBundle(path: string): BundleIndices {
   const indices: BundleIndices = {
     byAnilist: new Map(),

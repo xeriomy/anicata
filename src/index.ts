@@ -7,6 +7,8 @@ import type { Args, Cache, ContentType, Manifest, MetaDetail } from 'stremio-add
 import { buildManifest } from './addon/manifest.js';
 import { createCatalogHandler } from './addon/catalog.js';
 import { createMetaHandler } from './addon/meta.js';
+import { ResolveService } from './services/resolve.service.js';
+import { loadBundle } from './identity/bundle.js';
 import { loadAppConfig } from './config/index.js';
 import { HttpClient } from './net/http.js';
 import { TokenBucket } from './net/limiter.js';
@@ -40,6 +42,11 @@ export interface AppDeps {
    * through the composition root rather than by monkey-patching.
    */
   chain?: SourceChain;
+  /**
+   * Optional identity tier for injection, so tests can supply a bundle
+   * without the build artefact. Wiring only.
+   */
+  resolveService?: ResolveService;
 }
 
 /**
@@ -115,6 +122,11 @@ type SdkMetaHandler = (args: { type: ContentType; id: string }) => Promise<
   { meta: MetaDetail } & Cache
 >;
 
+// The build artefact from `npm run identity:build` (ADR-018/D2: fetched at
+// build time, never vendored). A missing file degrades to an empty index and
+// live tiers, which is why this is not fatal.
+const IDENTITY_BUNDLE_PATH = 'data/identity.min.json.gz';
+
 export function createApp(overrides?: Partial<AppDeps>): express.Express {
   const config = loadAppConfig(process.env);
   const log = createLogger(config.logLevel);
@@ -161,7 +173,13 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
     }
     return catalogHandle({ type: args.type, id: args.id, extra });
   });
-  builder.defineMetaHandler(createMetaHandler({ metaService }) as SdkMetaHandler);
+  // The identity tier. A missing or corrupt bundle degrades to an empty index
+  // rather than failing startup, so this never takes the process down.
+  const resolveService =
+    overrides?.resolveService ?? new ResolveService({ http, bundle: loadBundle(IDENTITY_BUNDLE_PATH), log });
+    builder.defineMetaHandler(
+    createMetaHandler({ metaService, resolve: resolveService }) as SdkMetaHandler,
+  );
 
   const app = express();
   const publicDir = join(dirname(fileURLToPath(import.meta.url)), '..', 'public');

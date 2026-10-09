@@ -1,5 +1,7 @@
 import type { Cache } from 'stremio-addon-sdk';
 import type { MetaService } from '../services/meta.service.js';
+import type { ResolveService } from '../services/resolve.service.js';
+import { parseIncomingId } from '../identity/ids.js';
 import { renderDetail } from '../render/detail.js';
 import type { StremioMetaDetail } from '../render/types.js';
 
@@ -54,14 +56,43 @@ function minimalMeta(args: MetaArgs): StremioMetaDetail {
 
 export function createMetaHandler(deps: {
   metaService: MetaService;
+  resolve?: ResolveService;
 }): (args: MetaArgs) => Promise<{ meta: StremioMetaDetail } & Cache> {
   return async (args: MetaArgs): Promise<{ meta: StremioMetaDetail } & Cache> => {
     try {
-      const parsed = parseMetaId(args.id);
+      // Parse before anything is looked up: a bare number is a Trakt id and a
+      // malformed prefix is not ours at all, and both must cost zero upstream
+      // calls (roadmap gate 5).
+      const parsed = parseIncomingId(args.id);
       if (parsed === null) {
         return { meta: minimalMeta(args), cacheMaxAge: 60 };
       }
-      const result = await deps.metaService.getById(`${parsed.namespace}:${parsed.value}`);
+
+      // Identity tier (Phase 3, spec §7.2).
+      //
+      // An `anilist:` id is already canonical, so it is fetched directly: the
+      // resolver cannot add anything to it except live-tier latency, and its
+      // failure would turn a perfectly fetchable title into a placeholder.
+      // Only other namespaces need translating — and a miss there is a clean
+      // "no results", never a fallback fetch under the wrong namespace
+      // (roadmap gate 4).
+      //
+      // Reached through the service so the protocol layer never imports the
+      // resolver's HTTP layer directly.
+      let canonical: string;
+      if (parsed.ns === 'anilist' || deps.resolve === undefined) {
+        // Already canonical, or no identity tier wired: fetch as given.
+        canonical = `${parsed.ns}:${parsed.value}`;
+      } else {
+        const resolved = await deps.resolve.resolveToCanonical(args.id);
+        // A miss is NOT a dead end. The source chain can still serve the id in
+        // its own namespace — Kitsu publishes under `kitsu:` for Kitsu-only
+        // titles (ADR-016) — so we fall back to the parsed id rather than
+        // returning a placeholder for a title we never actually asked for.
+        canonical = resolved?.canonicalId ?? `${parsed.ns}:${parsed.value}`;
+      }
+
+      const result = await deps.metaService.getById(canonical);
       if (result.anime === null) {
         return { meta: minimalMeta(args), cacheMaxAge: 60 };
       }
