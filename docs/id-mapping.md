@@ -348,10 +348,14 @@ for our own ids and keeps us out of the path for other add-ons' content.
 "links": [
   { "name": "AniList",     "category": "AniList", "url": "https://anilist.co/anime/21" },
   { "name": "MyAnimeList", "category": "MyAnimeList", "url": "https://myanimelist.net/anime/21" },
-  { "name": "Kitsu",       "category": "Kitsu", "url": "https://kitsu.app/anime/12", "type": "Kitsu" },
-  { "name": "AniDB",       "category": "AniDB", "url": "https://anidb.net/anime/21" }
-]
+  { "name": "Kitsu",       "category": "Kitsu", "url": "https://kitsu.app/anime/12" },
+  { "name": "AniDB",       "category": "AniDB", "url": "https://anidb.net/anime/69" }
 ```
+
+> Corrected 2026-10-08 (Phase 3, R4 + spec §5): the Kitsu entry carried a stray
+> `"type"` key, which contradicts the "exactly three keys" rule this section
+> states and which T9 now asserts in `test/meta-links.test.ts`. The AniDB id was
+> also wrong — One Piece is AniDB 69, not 21 (AniDB 21 is a different title).
 
 > Nuvio parses `links[]` requiring `name`, `category`, `url`, and additionally
 > mines `category ∈ {director, cast, actor, …}` for people ✅. Our categories are

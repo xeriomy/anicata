@@ -13,7 +13,7 @@
 | # | Finding | Consequence for this add-on |
 |---|---|---|
 | 1 | Nuvio speaks the **plain Stremio protocol** over HTTPS. Nothing exotic. | We can use `stremio-addon-sdk` with no Nuvio-specific code. |
-| 2 | Nuvio **routes `meta` requests by `idPrefixes`** on the `meta` resource, matched with `id.startsWith(prefix)`. | Declaring `idPrefixes: ["anilist:"]` makes Nuvio ask us *only* for our own IDs. Omitting it makes us a catch-all for every addon in the app. |
+| 2 | Nuvio **routes `meta` requests by `idPrefixes`** on the `meta` resource, matched with `id.startsWith(prefix)`. | Declaring `idPrefixes: ["anilist:", "kitsu:"]` makes Nuvio ask us *only* for our own IDs. Omitting it makes us a catch-all for every addon in the app. |
 | 3 | Nuvio **parses `anilist:` / `mal:` / `kitsu:` / `anidb:` ID prefixes natively** and classifies such titles as `ANIME`, routing them to its Simkl/Trakt anime tracking. | Emit `anilist:<id>`. We get correct anime classification *and* watch-state sync for free, with no IMDb/TMDB dependency. |
 | 4 | Catalog `extra` declarations **gate** features: no `isRequired` extra → appears on Home; `extra:[{name:"skip"}]` → paginates; `extra:[{name:"search"}]` → searchable; `extra:[{name:"genre",options:[…]}]` → browse-by-genre. | Manifest `extra` is a feature switchboard, not documentation. Getting it wrong silently removes catalogs from Home. |
 | 5 | Nuvio caches addon responses in a **50 MB OkHttp disk cache** and honours standard `Cache-Control`. | Correct `Cache-Control` headers are one of the highest-leverage performance features we have. |
@@ -124,10 +124,10 @@ Verified from `AddonManifestParser.parse()` and `AddonModels.kt`.
 
   // Root-level defaults, inherited by every resource that omits them
   "types": ["anime", "movie"],
-  "idPrefixes": ["anilist:"],
+  "idPrefixes": ["anilist:", "kitsu:"],
 
   // Either ["catalog","meta"] OR [{"name":"meta","types":[…],"idPrefixes":[…]}]
-  "resources": [ { "name": "meta", "types": ["anime"], "idPrefixes": ["anilist:"] } ],
+  "resources": [ { "name": "meta", "types": ["anime", "movie"], "idPrefixes": ["anilist:", "kitsu:"] } ],
 
   "catalogs": [
     { "type": "anime",           // REQUIRED
@@ -397,7 +397,12 @@ Three conditions, all required:
 3. `idPrefixes` is **empty** (match everything) **or** the id starts with one of them
 
 > **Consequence — the most important design decision in this report.**
-> We declare `{ "name": "meta", "types": ["anime"], "idPrefixes": ["anilist:"] }`.
+> We declare `{ "name": "meta", "types": ["anime", "movie"], "idPrefixes": ["anilist:", "kitsu:"] }`.
+>
+> Corrected 2026-10-08 (Phase 3, R4): the earlier single-prefix, anime-only
+> example predated the Phase 2 ADR-016 decision to publish Kitsu-only titles,
+> and the `movie` type the manifest has shipped since Phase 1. The live manifest
+> at `src/addon/manifest.ts:70-73` is the authority.
 > Nuvio then asks us **only** for ids beginning with `anilist:` — our own ids.
 > Without `idPrefixes`, our addon becomes a candidate for *every* id in the app,
 > including IMDb and TMDB ids from other add-ons, adding latency and risk to
@@ -423,8 +428,13 @@ return TmdbService.tmdbToImdb(tmdbId, …) ?: itemId
 ```
 
 If an id starts with `tmdb:`, Nuvio rewrites it to an IMDb id before calling us.
-We will not receive `tmdb:`-prefixed meta requests. **UNVERIFIED** whether this
-runs for our addon specifically — it runs unconditionally on the requested id.
+We will not receive `tmdb:`-prefixed meta requests.
+
+**VERIFIED 2026-10-08** (Phase 3, R4): the earlier UNVERIFIED here was wrong.
+The rewrite runs unconditionally on the requested id, before any addon lookup,
+so it applies to us as much as to any other addon — see R4 §Q4 with the source
+line. `tmdb:` is therefore an inbound namespace we may accept speculatively but
+will never be routed for.
 
 ### 8.2 Response envelope
 
