@@ -3,6 +3,7 @@ import { SourceError } from '../domain/errors.js';
 import { parseIncomingId } from './ids.js';
 import type { AnimeIdentity } from '../domain/anime.js';
 import type { BundleIndices } from './bundle.js';
+import type { TrimmedIdentityRow } from './trim.js';
 
 // Budget constants — shared deadline, never a fresh clock
 export const IDENTITY_BUDGET_MS = 1500;
@@ -58,6 +59,31 @@ function buildKitsuReverseUrl(kitsuId: number): URL {
 
 // --- Tier 0: Bundle lookup -----------------------------------------------------
 
+/** One bundle row -> canonical identity. The only place a row is widened. */
+function rowToIdentity(row: TrimmedIdentityRow): AnimeIdentity {
+  const tmdb =
+    row.themoviedb_id !== null &&
+    row.themoviedb_id !== undefined &&
+    typeof row.themoviedb_id === 'object'
+      ? {
+          tmdb: {
+            ...(row.themoviedb_id.tv !== undefined ? { tv: row.themoviedb_id.tv } : {}),
+            ...(row.themoviedb_id.movie !== undefined ? { movie: row.themoviedb_id.movie } : {}),
+          },
+        }
+      : {};
+  return {
+    anilist: row.anilist_id ?? 0,
+    ...(row.mal_id !== undefined && { mal: row.mal_id }),
+    ...(row.kitsu_id !== undefined && { kitsu: String(row.kitsu_id) }),
+    ...(row.anidb_id !== undefined && { anidb: row.anidb_id }),
+    ...(row.imdb_id !== undefined && { imdb: row.imdb_id }),
+    ...(row.tvdb_id !== undefined && { tvdb: row.tvdb_id }),
+    ...(row.simkl_id !== undefined && { simkl: row.simkl_id }),
+    ...tmdb,
+  } as AnimeIdentity;
+}
+
 function tryResolveFromBundle(
   parsed: ReturnType<typeof parseIncomingId> | null,
   bundle: BundleIndices
@@ -67,70 +93,32 @@ function tryResolveFromBundle(
   switch (parsed.ns) {
     case 'anilist': {
       const row = bundle.byAnilist.get(Number(parsed.value));
-      if (row === undefined) return null;
-      return {
-        anilist: row.anilist_id,
-        ...(row.mal_id !== undefined && { mal: row.mal_id }),
-        ...(row.kitsu_id !== undefined && { kitsu: String(row.kitsu_id) }),
-        ...(row.anidb_id !== undefined && { anidb: row.anidb_id }),
-        ...(row.themoviedb_id !== null && row.themoviedb_id !== undefined &&
-          typeof row.themoviedb_id === 'object' &&
-          {
-            tmdb: {
-              tv: row.themoviedb_id.tv,
-              movie: row.themoviedb_id.movie,
-            },
-          }),
-        ...(row.imdb_id !== undefined && { imdb: row.imdb_id }),
-        ...(row.tvdb_id !== undefined && { tvdb: row.tvdb_id }),
-        ...(row.simkl_id !== undefined && { simkl: row.simkl_id }),
-      } as AnimeIdentity;
+      return row === undefined ? null : rowToIdentity(row);
     }
     case 'kitsu': {
       const row = bundle.byKitsu.get(Number(parsed.value));
-      if (row === undefined) return null;
-      return {
-        anilist: row.anilist_id,
-        ...(row.mal_id !== undefined && { mal: row.mal_id }),
-        ...(row.kitsu_id !== undefined && { kitsu: String(row.kitsu_id) }),
-        ...(row.anidb_id !== undefined && { anidb: row.anidb_id }),
-        ...(row.themoviedb_id !== null && row.themoviedb_id !== undefined &&
-          typeof row.themoviedb_id === 'object' &&
-          {
-            tmdb: {
-              tv: row.themoviedb_id.tv,
-              movie: row.themoviedb_id.movie,
-            },
-          }),
-        ...(row.imdb_id !== undefined && { imdb: row.imdb_id }),
-        ...(row.tvdb_id !== undefined && { tvdb: row.tvdb_id }),
-        ...(row.simkl_id !== undefined && { simkl: row.simkl_id }),
-      } as AnimeIdentity;
+      return row === undefined ? null : rowToIdentity(row);
     }
     case 'mal': {
       const row = bundle.byMal.get(Number(parsed.value));
-      if (row === undefined) return null;
-      return {
-        anilist: row.anilist_id,
-        ...(row.mal_id !== undefined && { mal: row.mal_id }),
-        ...(row.kitsu_id !== undefined && { kitsu: String(row.kitsu_id) }),
-        ...(row.anidb_id !== undefined && { anidb: row.anidb_id }),
-        ...(row.themoviedb_id !== null && row.themoviedb_id !== undefined &&
-          typeof row.themoviedb_id === 'object' &&
-          {
-            tmdb: {
-              tv: row.themoviedb_id.tv,
-              movie: row.themoviedb_id.movie,
-            },
-          }),
-        ...(row.imdb_id !== undefined && { imdb: row.imdb_id }),
-        ...(row.tvdb_id !== undefined && { tvdb: row.tvdb_id }),
-        ...(row.simkl_id !== undefined && { simkl: row.simkl_id }),
-      } as AnimeIdentity;
+      return row === undefined ? null : rowToIdentity(row);
     }
     case 'anidb': {
-      // anidb is carried but not indexed for inbound resolution in this task
-      return null;
+      const row = bundle.byAnilist.get(Number(parsed.value));
+      return row === undefined ? null : rowToIdentity(row);
+    }
+    // tv-first: byTmdb is keyed on both the tv and the movie value, so a hit may
+    // be either leg. The resolved row still carries both, which is how a caller
+    // tells them apart.
+    case 'tmdb': {
+      const row = bundle.byTmdb.get(Number(parsed.value));
+      return row === undefined ? null : rowToIdentity(row);
+    }
+    // parseIncomingId normalises `imdb:0213338` -> `tt0213338`, so a bare `tt…`
+    // id and the prefixed form hit the same key.
+    case 'imdb': {
+      const row = bundle.byImdb.get(parsed.value);
+      return row === undefined ? null : rowToIdentity(row);
     }
     default:
       return null;
