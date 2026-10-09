@@ -176,7 +176,7 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
   // The identity tier. A missing or corrupt bundle degrades to an empty index
   // rather than failing startup, so this never takes the process down.
   const resolveService =
-    overrides?.resolveService ?? new ResolveService({ http, bundle: loadBundle(IDENTITY_BUNDLE_PATH), log });
+    overrides?.resolveService ?? new ResolveService({ http, bundle: loadBundle(IDENTITY_BUNDLE_PATH), log, cache });
     builder.defineMetaHandler(
     createMetaHandler({ metaService, resolve: resolveService }) as SdkMetaHandler,
   );
