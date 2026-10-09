@@ -63,4 +63,24 @@ export default tseslint.config(
       ],
     },
   },
+  {
+    // The identity resolver is its own layer: it may use domain, cache and net,
+    // but never a concrete source adapter. Adapters own source quirks (rate
+    // limits, paging caps); the resolver must stay independent of them so a
+    // source can be swapped or disabled without touching identity resolution.
+    files: ['src/identity/**/*.ts'],
+    rules: {
+      'no-restricted-imports': [
+        'error',
+        {
+          patterns: [
+            {
+              group: ['**/sources/**'],
+              message: 'identity/ may not import a source adapter; use net/ directly.',
+            },
+          ],
+        },
+      ],
+    },
+  },
 );
