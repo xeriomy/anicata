@@ -1,6 +1,6 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { readFileSync } from 'node:fs';
-import { resolveToCanonical } from '../src/identity/resolver.js';
+import { resolveToCanonical, clearIdentityCacheState } from '../src/identity/resolver.js';
 import { loadBundle } from '../src/identity/bundle.js';
 import { SourceError } from '../src/domain/errors.js';
 
@@ -28,6 +28,13 @@ function fakeHttp(payloads: unknown[]) {
 }
 
 const realBundle = loadBundle('data/identity.min.json.gz');
+
+// The AniZip 404 cache is module-global for the process lifetime. Without this
+// reset, an earlier test's 404 for `anilist:99999999` suppresses the AniZip call
+// every later test expects.
+beforeEach(() => {
+  clearIdentityCacheState();
+});
 
 describe('Tier 2 — AniZip', () => {
   it('resolves an anilist id from a real AniZip mappings block', async () => {
@@ -109,5 +116,68 @@ describe('Tier 2 — AniZip', () => {
     await resolveToCanonical(HIGH_ANILIST, fake.http, realBundle);
     const anizipCall = fake.getJson.mock.calls.at(-1)!;
     expect(anizipCall[1]?.timeoutMs).toBeLessThanOrEqual(900);
+  });
+});
+
+describe('Tier 2 — the shared deadline is measured, not restated', () => {
+  const AniZipOk = { mappings: { anilist_id: 21, mal_id: 21, kitsu_id: 12 } };
+
+  it('AniZip receives the REMAINING budget after a slow Kitsu leg', async () => {
+    // Injected clock, not a fake timer: each Kitsu call costs 700 ms of wall
+    // time, so the AniZip leg must be offered 1500 - 700 = 800 ms.
+    let t = 0;
+    const now = (): number => t;
+    const calls: Array<[string, number | undefined]> = [];
+    const getJson = vi.fn<
+      (url: string, init?: { timeoutMs?: number; headers?: Record<string, string> }) => Promise<{
+        data: unknown;
+        headers: Record<string, string>;
+        status: number;
+      }>
+    >(async (url, init) => {
+      calls.push([url.includes('api.ani.zip') ? 'anizip' : 'kitsu', init?.timeoutMs]);
+      if (!url.includes('api.ani.zip')) t += 700;
+      return url.includes('api.ani.zip')
+        ? { data: AniZipOk, headers: {}, status: 200 }
+        : { data: [], headers: {}, status: 200 };
+    });
+
+    const result = await resolveToCanonical(
+      'anilist:99999999',
+      { getJson } as never,
+      realBundle,
+      1500,
+      now,
+    );
+    expect(result).not.toBeNull();
+
+    const anizip = calls.filter((c) => c[0] === 'anizip').at(-1);
+    expect(calls.length).toBe(2);
+    expect(anizip?.[1]).toBe(800);
+    expect(700 + (anizip?.[1] ?? 0)).toBeLessThanOrEqual(1500);
+  });
+
+  it('the tier caps sum cannot exceed the shared deadline at any elapsed point', async () => {
+    // Kitsu burns its cap slowly; AniZip must never be offered the full 900.
+    let t = 0;
+    const now = (): number => t;
+    const caps: number[] = [];
+    const getJson = vi.fn<
+      (url: string, init?: { timeoutMs?: number; headers?: Record<string, string> }) => Promise<{
+        data: unknown;
+        headers: Record<string, string>;
+        status: number;
+      }>
+    >(async (url, init) => {
+      caps.push(init?.timeoutMs ?? 0);
+      if (!url.includes('api.ani.zip')) t += 650;
+      return { data: { mappings: { anilist_id: 21, mal_id: 21, kitsu_id: 12 } }, headers: {}, status: 200 };
+    });
+
+    await resolveToCanonical('anilist:99999999', { getJson } as never, realBundle, 1500, now);
+
+    expect(caps.length).toBe(2);
+    // 1500 total budget, minus the 650 ms the first tier actually spent.
+    expect(caps.at(-1)).toBeLessThanOrEqual(850);
   });
 });

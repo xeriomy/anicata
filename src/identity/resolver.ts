@@ -308,6 +308,19 @@ async function resolveFromKitsuReverse(
  * would make an already-canonical id pay live-tier latency for no translation.
  * Measured cost of the bundle tier is ~0.006 ms.
  */
+/**
+ * Clears the process-lifetime negative-cache state.
+ *
+ * It exists so tests can be order-independent: the AniZip 404 cache is
+ * module-global, so without this a test that 404s `anilist:99999999` silently
+ * suppresses every later test that expects an AniZip call for the same id —
+ * which reads as a broken test rather than as leaked state. Production has no
+ * reason to call this.
+ */
+export function clearIdentityCacheState(): void {
+  anizipNegativeCache.clear();
+}
+
 export function resolveFromBundleOnly(
   input: string,
   bundle: BundleIndices
@@ -324,9 +337,18 @@ export async function resolveToCanonical(
   // parameter exists to prevent: a hardcoded budget makes the tier-skip guard
   // unreachable, so the deadline is never honoured and the 5 s meta budget can
   // be blown from inside the identity path.
-  remainingMs: number = IDENTITY_BUDGET_MS
+  remainingMs: number = IDENTITY_BUDGET_MS,
+  now: () => number = Date.now
 ): Promise<AnimeIdentity | null> {
-  const remainingBudget = remainingMs;
+  // The shared deadline is measured, not restated. Every tier receives what is
+  // LEFT after the tiers before it, so the sum of the tier caps can never
+  // exceed the shared budget. Before this was measured, each tier was handed
+  // the original figure: Kitsu's 700 ms plus AniZip's 900 ms totalled 1600 ms
+  // against a 1500 ms deadline, and the excess was spent inside Nuvio's 5 s
+  // meta budget where nobody was watching.
+  const startedAt = now();
+  const remainingAfterPreviousTiers = (): number =>
+    Math.max(0, remainingMs - (now() - startedAt));
 
   // --- Tier 0: Bundle lookup (in-memory, essentially 0 cost) ---
   const parsed = parseIncomingId(input);
@@ -336,8 +358,9 @@ export async function resolveToCanonical(
   }
 
   // --- Tier 1: Kitsu live lookup ---
-  // A tier is skipped unless at least TIER_SKIP_FLOOR_MS remains.
-  if (remainingBudget < TIER_SKIP_FLOOR_MS) {
+  // A tier is skipped unless at least TIER_SKIP_FLOOR_MS remains, measured
+  // against the shared deadline rather than a fresh figure.
+  if (remainingAfterPreviousTiers() < TIER_SKIP_FLOOR_MS) {
     return null;
   }
 
@@ -350,24 +373,39 @@ export async function resolveToCanonical(
   // If we have a kitsu namespace, do a reverse lookup;
   // otherwise attempt a forward lookup from the parsed namespace.
   if (parsed.ns === 'kitsu') {
-    const kitsuReverse = await resolveFromKitsuReverse(
-      Number(parsed.value),
-      http,
-      remainingBudget,
-    );
+    let kitsuReverse;
+    try {
+      kitsuReverse = await resolveFromKitsuReverse(
+        Number(parsed.value),
+        http,
+        remainingAfterPreviousTiers(),
+      );
+    } catch {
+      return null;
+    }
     if (kitsuReverse) return kitsuReverse;
   } else {
-    const kitsuForward = await resolveFromKitsuForward(
-      parsed,
-      http,
-      remainingBudget,
-    );
+    let kitsuForward;
+    try {
+      kitsuForward = await resolveFromKitsuForward(
+        parsed,
+        http,
+        remainingAfterPreviousTiers(),
+      );
+    } catch {
+      return null;
+    }
     if (kitsuForward) return kitsuForward;
   }
 
   // Tier 2: AniZip. Runs on whatever budget the earlier tiers left, never on a
   // fresh clock — see `resolveToCanonical`.
-  const anizip = await resolveFromAniZip(parsed, http, remainingBudget);
+  let anizip;
+  try {
+    anizip = await resolveFromAniZip(parsed, http, remainingAfterPreviousTiers());
+  } catch {
+    return null;
+  }
   if (anizip) return anizip;
 
   // Tier 3 (title lookup) is still stubbed to a clean miss.
