@@ -1,4 +1,4 @@
-import type { Anime } from '../domain/anime.js';
+import type { Anime, AnimeIdentity } from '../domain/anime.js';
 import { renderPreview } from './preview.js';
 import type { StremioMetaDetail } from './types.js';
 
@@ -41,33 +41,63 @@ export function renderDetail(a: Anime): StremioMetaDetail {
     ...(language !== undefined ? { language, audioLanguage: language } : {}),
     hashtags: a.hashtags,
     awards: undefined,
-    links: [
-      ...(a.identity.anilist !== undefined
-        ? [
-            {
-              name: 'AniList',
-              category: 'AniList',
-              url: `https://anilist.co/anime/${a.identity.anilist}`,
-            },
-          ]
-        : [
-            {
-              name: 'Kitsu',
-              category: 'Kitsu',
-              url: `https://kitsu.io/anime/${a.identity.kitsu}`,
-            },
-          ]),
-      ...(a.identity.mal != null
-        ? [
-            {
-              name: 'MyAnimeList',
-              category: 'MyAnimeList',
-              url: `https://myanimelist.net/anime/${a.identity.mal}`,
-            },
-          ]
-        : []),
-    ],
+    links: buildLinks(a.identity),
     videos: [],
   };
   return stripUndefined(full) as StremioMetaDetail;
+}
+
+/**
+ * `links[]` for AniList, MyAnimeList, Kitsu and AniDB — spec §5 (D1).
+ *
+ * Emitted even though Nuvio parses but never displays them (verified at Nuvio
+ * HEAD 966a52b): other Stremio clients do render links, and the cost is a few
+ * hundred bytes on a response that already carries a poster URL.
+ *
+ * Two rules that must not drift:
+ *  - exactly three keys per entry (`name`, `category`, `url`) — all three are
+ *    required by Nuvio's `MetaDetailsParser.links()`;
+ *  - an entry is omitted when its id is unknown. Never invent one: a
+ *    `kitsu.io/anime/undefined` link is worse than no link, and this is
+ *    precisely what the previous unconditional Kitsu branch produced.
+ *
+ * Categories are database names, so they can never collide with Nuvio's
+ * people-mining filters (which look for cast/crew style categories).
+ */
+function buildLinks(identity: AnimeIdentity): Array<{ name: string; category: string; url: string }> {
+  const links: Array<{ name: string; category: string; url: string }> = [];
+  // `kitsu` is a string on the anilist-carrying branch (cross-id) and a number
+  // on the Kitsu-only branch (ADR-016). Both stringify identically for a URL.
+  const kitsu = identity.kitsu !== undefined ? String(identity.kitsu) : undefined;
+
+  if (identity.anilist !== undefined) {
+    links.push({
+      name: 'AniList',
+      category: 'AniList',
+      url: `https://anilist.co/anime/${identity.anilist}`,
+    });
+  }
+  if (identity.mal !== undefined) {
+    links.push({
+      name: 'MyAnimeList',
+      category: 'MyAnimeList',
+      url: `https://myanimelist.net/anime/${identity.mal}`,
+    });
+  }
+  if (kitsu !== undefined) {
+    links.push({ name: 'Kitsu', category: 'Kitsu', url: `https://kitsu.app/anime/${kitsu}` });
+  }
+  // `anidb` exists only on the anilist-carrying branch of the union; the
+  // Kitsu-only branch (ADR-016) cannot carry one. `in` is the narrowing that
+  // respects the union instead of asserting past it.
+  const anidb = 'anidb' in identity ? identity.anidb : undefined;
+
+  if (anidb !== undefined) {
+    links.push({
+      name: 'AniDB',
+      category: 'AniDB',
+      url: `https://anidb.net/anime/${anidb}`,
+    });
+  }
+  return links;
 }
