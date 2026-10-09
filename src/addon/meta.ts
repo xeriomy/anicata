@@ -2,8 +2,10 @@ import type { Cache } from 'stremio-addon-sdk';
 import type { MetaService } from '../services/meta.service.js';
 import type { ResolveService } from '../services/resolve.service.js';
 import { parseIncomingId } from '../identity/ids.js';
+import { mergeIdentity } from '../identity/merge.js';
 import { renderDetail } from '../render/detail.js';
 import type { StremioMetaDetail } from '../render/types.js';
+import type { AnimeIdentity } from '../domain/anime.js';
 
 export type ParsedMetaId = { namespace: 'anilist' | 'kitsu'; value: string };
 
@@ -80,9 +82,16 @@ export function createMetaHandler(deps: {
       // Reached through the service so the protocol layer never imports the
       // resolver's HTTP layer directly.
       let canonical: string;
-      if (parsed.ns === 'anilist' || deps.resolve === undefined) {
-        // Already canonical, or no identity tier wired: fetch as given.
+      let resolvedIdentity: AnimeIdentity | null = null;
+      if (deps.resolve === undefined) {
+        // No identity tier wired: fetch as given.
         canonical = `${parsed.ns}:${parsed.value}`;
+      } else if (parsed.ns === 'anilist') {
+        // Already canonical, so there is nothing to translate — but the bundle
+        // can still enrich it with ids the source omits. Bundle-only, so a
+        // miss costs no live-tier latency.
+        canonical = `anilist:${parsed.value}`;
+        resolvedIdentity = deps.resolve.enrichFromBundle(args.id);
       } else {
         const resolved = await deps.resolve.resolveToCanonical(args.id);
         // A miss is NOT a dead end. The source chain can still serve the id in
@@ -90,13 +99,21 @@ export function createMetaHandler(deps: {
         // titles (ADR-016) — so we fall back to the parsed id rather than
         // returning a placeholder for a title we never actually asked for.
         canonical = resolved?.canonicalId ?? `${parsed.ns}:${parsed.value}`;
+        resolvedIdentity = resolved?.identity ?? null;
       }
 
       const result = await deps.metaService.getById(canonical);
       if (result.anime === null) {
         return { meta: minimalMeta(args), cacheMaxAge: 60 };
       }
-      return { meta: renderDetail(result.anime), cacheMaxAge: result.cacheMaxAge };
+      // Overlay the resolved identity onto what the source supplied. The source
+      // owns the canonical id; the resolved tier only fills what it was
+      // missing — which is what turns links[] from 2 entries into 4.
+      const anime =
+        resolvedIdentity === null
+          ? result.anime
+          : { ...result.anime, identity: mergeIdentity(result.anime.identity, resolvedIdentity) };
+      return { meta: renderDetail(anime), cacheMaxAge: result.cacheMaxAge };
     } catch {
       return { meta: minimalMeta(args), cacheMaxAge: 10 };
     }

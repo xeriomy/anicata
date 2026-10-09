@@ -295,6 +295,26 @@ async function resolveFromKitsuReverse(
 
 // --- Main resolver ------------------------------------------------------------
 
+/**
+ * Bundle-only resolution: the in-memory tier and nothing else.
+ *
+ * For ids that are already canonical in our own namespace there is nothing to
+ * translate, but there is still something to enrich — the bundle adds Kitsu,
+ * AniDB, TMDB and IMDb ids the source did not supply (One Piece arrives with
+ * AniList + MAL only, which renders 2 of 4 links).
+ *
+ * The reason this exists rather than just calling `resolveToCanonical`: that
+ * function falls through to the Kitsu and AniZip tiers on a bundle miss, which
+ * would make an already-canonical id pay live-tier latency for no translation.
+ * Measured cost of the bundle tier is ~0.006 ms.
+ */
+export function resolveFromBundleOnly(
+  input: string,
+  bundle: BundleIndices
+): AnimeIdentity | null {
+  return tryResolveFromBundle(parseIncomingId(input), bundle);
+}
+
 export async function resolveToCanonical(
   input: string,
   http: HttpClient,

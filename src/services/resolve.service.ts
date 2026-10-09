@@ -1,6 +1,6 @@
 import type { HttpClient } from '../net/http.js';
 import type { BundleIndices } from '../identity/bundle.js';
-import { resolveToCanonical, IDENTITY_BUDGET_MS } from '../identity/resolver.js';
+import { resolveToCanonical, resolveFromBundleOnly, IDENTITY_BUDGET_MS } from '../identity/resolver.js';
 import type { Logger } from '../util/logger.js';
 import { stremioIdFor } from '../domain/anime.js';
 import type { AnimeIdentity } from '../domain/anime.js';
@@ -23,6 +23,15 @@ export class ResolveService {
     this.http = deps.http;
     this.bundle = deps.bundle;
     this.log = deps.log;
+  }
+
+  /**
+   * Bundle-only enrichment for an id that is already canonical in our own
+   * namespace. Never touches the network: a miss returns null and the source's
+   * identity is used as-is.
+   */
+  enrichFromBundle(input: string): AnimeIdentity | null {
+    return resolveFromBundleOnly(input, this.bundle);
   }
 
   /**

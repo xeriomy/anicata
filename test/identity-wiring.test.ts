@@ -14,8 +14,12 @@ function fakeMetaService(): MetaService {
 
 function fakeResolve(
   impl: (id: string) => Promise<{ identity: unknown; canonicalId: string } | null>,
+  enrich: (id: string) => unknown = () => null,
 ): ResolveService {
-  return { resolveToCanonical: vi.fn(impl) } as unknown as ResolveService;
+  return {
+    resolveToCanonical: vi.fn(impl),
+    enrichFromBundle: vi.fn(enrich),
+  } as unknown as ResolveService;
 }
 
 describe('meta handler — identity wiring (gates 4, 5)', () => {
@@ -27,8 +31,9 @@ describe('meta handler — identity wiring (gates 4, 5)', () => {
 
     const out = await handler({ type: 'anime', id: 'anilist:99999999' });
 
-    // An `anilist:` id is already canonical: the identity tier is not consulted
-    // at all, so a miss there cannot cost extra live-tier calls (gate 4).
+    // An `anilist:` id is already canonical, so the LIVE identity tier is never
+    // consulted — only the in-memory bundle is, which cannot cost a network call
+    // (gate 4).
     expect(resolve.resolveToCanonical).not.toHaveBeenCalled();
     // Exactly one fetch, under the parsed id — no cascade, no second attempt.
     expect(getById).toHaveBeenCalledTimes(1);
@@ -92,7 +97,10 @@ describe('meta handler — identity wiring (gates 4, 5)', () => {
     const metaService = {
       getById: vi.fn(async () => ({ anime, cacheMaxAge: 60 })),
     } as unknown as MetaService;
-    const resolve = fakeResolve(async () => ({ identity: anime.identity, canonicalId: 'anilist:21' }));
+    const resolve = fakeResolve(
+      async () => ({ identity: anime.identity, canonicalId: 'anilist:21' }),
+      () => anime.identity,
+    );
     const handler = createMetaHandler({ metaService, resolve });
 
     const out = await handler({ type: 'anime', id: 'anilist:21' });
