@@ -30,8 +30,15 @@ https://<host>/manifest.json
 
 Locally that is `http://127.0.0.1:7000/manifest.json` (port from `PORT`,
 default `7000`). Nuvio fetches this URL, reads the catalogue list, and calls
-back for catalog pages and meta. No configuration page, no API keys, no
-sign-up — `behaviorHints` declares `configurable: false`.
+back for catalog pages and meta. No configuration page and no sign-up —
+`behaviorHints` declares `configurable: false`, so a user installing the
+add-on never sees a setup form.
+
+> **One operator-side setting exists:** `TMDB_API_KEY`, an optional
+> *self-host* setting that adds logos and backdrops to meta. It is read from
+> the environment and is never sent to a client, so there is no way for a user
+> to supply it and no key is needed to run the add-on. See
+> [Environment](#environment) below.
 
 > `?titleLang=` is **not a working option.** `parseRequestConfig`
 > (`src/config/index.ts`) exists and is unit-tested, but the SDK router
@@ -322,6 +329,33 @@ Environment (see `.env.example` — it matches `loadAppConfig` exactly):
 | `ANILIST_RATE_LIMIT` | `25` | AniList token-bucket refill, req/min |
 | `HTTP_TIMEOUT_MS` | `3500` | per-request timeout (capped at 4000) |
 | `CACHE_MAX_ENTRIES` | `10000` | in-memory LRU cap |
+| `TMDB_API_KEY` | *(unset)* | **Optional.** Free v3 key from [TMDB](https://www.themoviedb.org/settings/api). Enables logos/backdrops on meta; unset means the artwork tier is never constructed |
+
+This is an **operator** setting, not a user one: it belongs to whoever runs
+the add-on, and it is the reason the tier is off by default rather than
+requiring a key to work at all.
+
+```bash
+# Run with artwork enrichment on (TMDB repo images + logo)
+TMDB_API_KEY='your-v3-key' npm start
+
+# Or export it once and forget it
+export TMDB_API_KEY='your-v3-key'
+npm start
+```
+
+With no key the add-on behaves **exactly** as it did without it: no artwork
+tier is constructed, so there is no extra request, no extra latency, and no
+logo/banner the source did not already supply.
+
+> **Why there is no `/configure` page yet.** Stremio add-ons advertise a
+> `configure` URL in `behaviorHints`; Nuvio shows it as a settings form and
+> passes the submitted values back as a query string. That lands in Phase 8,
+> where `TMDB_API_KEY` becomes a form field instead of an environment variable
+> — and where `titleLang` becomes real too. Until then the environment
+> variable is the only way in, which is why it is documented here rather than
+> discoverable in the UI. `.env` is gitignored; the shell passes the variable
+> in directly (this project deliberately has no `dotenv` dependency).
 
 To exercise the Kitsu fallback deterministically, point `ANILIST_URL` at a
 dead address so AniList fails fast and Kitsu serves with nearly the whole
