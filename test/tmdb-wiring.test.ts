@@ -14,6 +14,13 @@ const SENTINEL_KEY = 'anicata-test-sentinel-not-a-real-key';
 const LOGO = 'https://image.tmdb.org/t/p/w500/9F7daAmibx8ZHTE17CdM5FAwiHE.png';
 const BACKDROP = 'https://image.tmdb.org/t/p/w1280/v38qp4bySLTXYu3MF8r5GD51FN3.jpg';
 
+/**
+ * What the Fribb bundle actually carries for One Piece. The source returns only
+ * anilist+mal, so these cross-ids are the whole reason the artwork tier can look
+ * anything up at all.
+ */
+const BUNDLE_IDENTITY = { anilist: 21, mal: 21, kitsu: '12', tvdb: 81797, imdb: 'tt0388629' };
+
 function onePiece(images: { poster?: string; background?: string } = {}): Anime {
   return {
     identity: { anilist: 21, mal: 21, kitsu: '12' },
@@ -43,10 +50,13 @@ function deps(artwork: ReturnType<typeof vi.fn>) {
     } as unknown as CatalogService,
     resolveService: {
       resolveToCanonical: vi.fn(async () => ({
-        identity: onePiece().identity,
+        identity: BUNDLE_IDENTITY,
         canonicalId: 'anilist:21',
       })),
-      enrichFromBundle: vi.fn(() => null),
+      // Mirrors the real bundle row for One Piece: AniList returns no tvdb or
+      // imdb, so without this the artwork tier has nothing to look up with and
+      // the early-start path would be untested.
+      enrichFromBundle: vi.fn(() => BUNDLE_IDENTITY),
     } as unknown as ResolveService,
     episodeService: {
       episodesFor: vi.fn(async () => null),
@@ -145,9 +155,38 @@ describe('TMDB artwork wiring (Phase 4)', () => {
     expect(m.logo).toBeUndefined();
   });
 
+  it('asks for artwork before it asks the source for the anime', async () => {
+    // The artwork tier has its own 1500 ms budget. Awaited AFTER the source
+    // fetch it would stack on top of the 4000 ms source timeout — 5.5 s against
+    // Nuvio's 5 s meta budget — so it has to overlap. An await placed after
+    // getById is exactly this bug, and this test is what catches it returning.
+    //
+    // Asserted as call ORDER, not wall-clock: supertest does not dispatch the
+    // request until its promise is awaited, so any "check before the response
+    // arrives" scheme proves nothing. `invocationCallOrder` is a global counter
+    // across all spies, so it is timing-independent.
+    const getById = vi.fn(async () => ({ anime: onePiece(), cacheMaxAge: 300 }));
+    const artwork = vi.fn(async () => ({ logo: LOGO }));
+    const app = createApp({
+      config: configWith(SENTINEL_KEY),
+      ...deps(artwork),
+      metaService: { getById } as unknown as MetaService,
+    });
+
+    const res = await request(app).get('/meta/anime/anilist%3A21.json');
+
+    expect(getById).toHaveBeenCalledTimes(1);
+    expect(artwork).toHaveBeenCalledTimes(1);
+    // The number that matters: which was asked first.
+    expect(artwork.mock.invocationCallOrder[0]!).toBeLessThan(
+      getById.mock.invocationCallOrder[0]!,
+    );
+    const m = (res.body as { meta: Record<string, unknown> }).meta;
+    expect(m.logo).toBe(LOGO);
+    expect(m.name).toBe('ONE PIECE');
+  });
+
   it('still carries links and episodes alongside the logo', async () => {
-    // The artwork tier must not regress either earlier phase: links[] from
-    // Phase 3 and videos[] from Phase 4's episode half both survive it.
     const app = createApp({
       config: configWith(SENTINEL_KEY),
       ...deps(vi.fn(async () => ({ logo: LOGO }))),

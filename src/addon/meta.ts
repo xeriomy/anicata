@@ -9,6 +9,7 @@ import type { StremioMetaDetail } from '../render/types.js';
 import { stremioIdFor, type AnimeIdentity } from '../domain/anime.js';
 import type { EpisodeService } from '../services/episode.service.js';
 import type { TmdbArtworkSource } from '../sources/tmdb/source.js';
+import type { TmdbArtwork } from '../render/artwork.js';
 
 export type ParsedMetaId = { namespace: 'anilist' | 'kitsu'; value: string };
 
@@ -114,6 +115,20 @@ export function createMetaHandler(deps: {
         resolvedIdentity = resolved?.identity ?? null;
       }
 
+      // Artwork enrichment (Phase 4, TMDB). Started HERE, in parallel with the
+      // source fetch, not after it: this tier carries its own 1500 ms budget,
+      // and awaiting it once `getById` has resolved would stack 1500 ms on top
+      // of the source's 4000 ms timeout — 5.5 s against Nuvio's 5 s meta budget.
+      //
+      // Keyed on the RESOLVED identity rather than the source's, because TMDB is
+      // looked up by tvdb/imdb and those are cross-ids the source rarely
+      // carries (AniList returns neither). With no identity tier wired there is
+      // nothing to look up early, so it falls back to the fetched anime.
+      const artworkFetch: Promise<TmdbArtwork | undefined> | undefined =
+        deps.artwork !== undefined && resolvedIdentity !== null
+          ? deps.artwork.artworkFor(resolvedIdentity).catch(() => undefined)
+          : undefined;
+
       const result = await deps.metaService.getById(canonical);
       if (result.anime === null) {
         return { meta: minimalMeta(args), cacheMaxAge: 60 };
@@ -134,25 +149,22 @@ export function createMetaHandler(deps: {
           ? undefined
           : videosFromEpisodes(stremioIdFor(anime.identity), episodeBlock);
       const rendered = renderDetail(anime, videos);
-      // Artwork enrichment (Phase 4, TMDB). Same merge rule the identity tier
-      // settled on in Phase 3: TMDB only fills what the source did not supply,
-      // so a wide backdrop can never displace a poster the source chose. Started
-      // alongside the other two tiers and keyed on the RESOLVED identity, since
-      // the TMDB id is derived from cross-ids the source may not have carried.
-      if (deps.artwork !== undefined) {
-        const art = await deps.artwork.artworkFor(anime.identity).catch(() => undefined);
-        if (art !== undefined && (art.logo !== undefined || art.backdrop !== undefined)) {
-          return {
-            meta: {
-              ...rendered,
-              ...(rendered.logo === undefined && art.logo !== undefined ? { logo: art.logo } : {}),
-              ...(rendered.banner === undefined && art.backdrop !== undefined
-                ? { banner: art.backdrop, background: art.backdrop }
-                : {}),
-            },
-            cacheMaxAge: result.cacheMaxAge,
-          };
-        }
+      // Artwork enrichment, already in flight. The merge rule is the one Phase
+      // 3 settled for identity: TMDB only fills what the source did not supply,
+      // so a wide backdrop can never displace a poster the source chose.
+      const art = await (artworkFetch ??
+        deps.artwork?.artworkFor(anime.identity).catch(() => undefined));
+      if (art !== undefined && (art.logo !== undefined || art.backdrop !== undefined)) {
+        return {
+          meta: {
+            ...rendered,
+            ...(rendered.logo === undefined && art.logo !== undefined ? { logo: art.logo } : {}),
+            ...(rendered.banner === undefined && art.backdrop !== undefined
+              ? { banner: art.backdrop, background: art.backdrop }
+              : {}),
+          },
+          cacheMaxAge: result.cacheMaxAge,
+        };
       }
       return { meta: rendered, cacheMaxAge: result.cacheMaxAge };
     } catch {
