@@ -11,6 +11,16 @@ export interface AppConfig {
   anilistRateLimitPerMinute: number;
   httpTimeoutMs: number;
   cacheMaxEntries: number;
+  /**
+   * Operator-supplied TMDB key for Phase 4 artwork enrichment.
+   *
+   * Absent (`undefined`) means the enrichment is off, and the add-on must behave
+   * exactly as it did without it. There is deliberately NO default: a hardcoded
+   * key would make the add-on depend on one person's credential and would leak
+   * it to everyone who clones the repo. Phase 8's `/configure` page will collect
+   * it; until then the environment variable is the only way in.
+   */
+  tmdbApiKey?: string;
 }
 
 const TITLE_LANGS: readonly TitleLang[] = ['english', 'romaji', 'native'];
@@ -48,7 +58,27 @@ function readString(env: NodeJS.ProcessEnv, key: string, fallback: string): stri
   return raw;
 }
 
+/**
+ * Optional credentials read from the environment.
+ *
+ * Unlike `readString` there is no fallback: an unset, empty or whitespace-only
+ * value all mean "not configured" and must produce `undefined`, because an
+ * empty-string credential would be sent upstream and rejected on every request
+ * rather than failing the feature off cleanly.
+ */
+function readOptionalString(env: NodeJS.ProcessEnv, key: string): string | undefined {
+  const raw = env[key];
+  if (raw === undefined) return undefined;
+  const trimmed = raw.trim();
+  return trimmed === '' ? undefined : trimmed;
+}
+
 export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
+  // Conditional spread, not a direct assignment: exactOptionalPropertyTypes
+  // rejects writing `undefined` into an optional key, and the distinction is
+  // load-bearing here — `tmdbApiKey: undefined` would claim the key was
+  // configured, while omitting it says the enrichment is simply off.
+  const tmdbApiKey = readOptionalString(env, 'TMDB_API_KEY');
   return {
     port: readInt(env, 'PORT', 7000),
     logLevel: readEnum(env, 'LOG_LEVEL', LOG_LEVELS, 'info'),
@@ -56,6 +86,7 @@ export function loadAppConfig(env: NodeJS.ProcessEnv = process.env): AppConfig {
     anilistRateLimitPerMinute: readInt(env, 'ANILIST_RATE_LIMIT', 25),
     httpTimeoutMs: Math.min(readInt(env, 'HTTP_TIMEOUT_MS', 3500), 4000),
     cacheMaxEntries: readInt(env, 'CACHE_MAX_ENTRIES', 10000),
+    ...(tmdbApiKey !== undefined ? { tmdbApiKey } : {}),
   };
 }
 

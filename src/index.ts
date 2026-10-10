@@ -10,7 +10,7 @@ import { createMetaHandler } from './addon/meta.js';
 import { ResolveService } from './services/resolve.service.js';
 import { EpisodeService } from './services/episode.service.js';
 import { loadBundle } from './identity/bundle.js';
-import { loadAppConfig } from './config/index.js';
+import { loadAppConfig, type AppConfig } from './config/index.js';
 import { HttpClient } from './net/http.js';
 import { TokenBucket } from './net/limiter.js';
 import { TTLCache } from './cache/store.js';
@@ -50,6 +50,11 @@ export interface AppDeps {
   resolveService?: ResolveService;
   /** Optional episode tier for injection. Wiring only (Phase 4). */
   episodeService?: EpisodeService;
+  /**
+   * Optional config for injection, so tests can supply a TMDB key without it
+   * ever coming from `process.env`. Wiring only.
+   */
+  config?: AppConfig;
 }
 
 /**
@@ -132,7 +137,7 @@ type SdkMetaHandler = (args: { type: ContentType; id: string }) => Promise<
 const IDENTITY_BUNDLE_PATH = 'data/identity.min.json.gz';
 
 export function createApp(overrides?: Partial<AppDeps>): express.Express {
-  const config = loadAppConfig(process.env);
+  const config = overrides?.config ?? loadAppConfig(process.env);
   const log = createLogger(config.logLevel);
   const http = new HttpClient({ timeoutMs: config.httpTimeoutMs });
   const limiter = new TokenBucket({
