@@ -8,6 +8,7 @@ import { videosFromEpisodes } from '../render/videos.js';
 import type { StremioMetaDetail } from '../render/types.js';
 import { stremioIdFor, type AnimeIdentity } from '../domain/anime.js';
 import type { EpisodeService } from '../services/episode.service.js';
+import type { TmdbArtworkSource } from '../sources/tmdb/source.js';
 
 export type ParsedMetaId = { namespace: 'anilist' | 'kitsu'; value: string };
 
@@ -61,6 +62,7 @@ export function createMetaHandler(deps: {
   metaService: MetaService;
   resolve?: ResolveService;
   episodes?: EpisodeService;
+  artwork?: TmdbArtworkSource;
 }): (args: MetaArgs) => Promise<{ meta: StremioMetaDetail } & Cache> {
   return async (args: MetaArgs): Promise<{ meta: StremioMetaDetail } & Cache> => {
     try {
@@ -131,7 +133,28 @@ export function createMetaHandler(deps: {
         episodeBlock === null
           ? undefined
           : videosFromEpisodes(stremioIdFor(anime.identity), episodeBlock);
-      return { meta: renderDetail(anime, videos), cacheMaxAge: result.cacheMaxAge };
+      const rendered = renderDetail(anime, videos);
+      // Artwork enrichment (Phase 4, TMDB). Same merge rule the identity tier
+      // settled on in Phase 3: TMDB only fills what the source did not supply,
+      // so a wide backdrop can never displace a poster the source chose. Started
+      // alongside the other two tiers and keyed on the RESOLVED identity, since
+      // the TMDB id is derived from cross-ids the source may not have carried.
+      if (deps.artwork !== undefined) {
+        const art = await deps.artwork.artworkFor(anime.identity).catch(() => undefined);
+        if (art !== undefined && (art.logo !== undefined || art.backdrop !== undefined)) {
+          return {
+            meta: {
+              ...rendered,
+              ...(rendered.logo === undefined && art.logo !== undefined ? { logo: art.logo } : {}),
+              ...(rendered.banner === undefined && art.backdrop !== undefined
+                ? { banner: art.backdrop, background: art.backdrop }
+                : {}),
+            },
+            cacheMaxAge: result.cacheMaxAge,
+          };
+        }
+      }
+      return { meta: rendered, cacheMaxAge: result.cacheMaxAge };
     } catch {
       return { meta: minimalMeta(args), cacheMaxAge: 10 };
     }

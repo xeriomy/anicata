@@ -9,6 +9,7 @@ import { createCatalogHandler } from './addon/catalog.js';
 import { createMetaHandler } from './addon/meta.js';
 import { ResolveService } from './services/resolve.service.js';
 import { EpisodeService } from './services/episode.service.js';
+import { TmdbArtworkSource } from './sources/tmdb/source.js';
 import { loadBundle } from './identity/bundle.js';
 import { loadAppConfig, type AppConfig } from './config/index.js';
 import { HttpClient } from './net/http.js';
@@ -50,6 +51,8 @@ export interface AppDeps {
   resolveService?: ResolveService;
   /** Optional episode tier for injection. Wiring only (Phase 4). */
   episodeService?: EpisodeService;
+  /** Optional artwork tier for injection. Wiring only (Phase 4). */
+  artworkSource?: TmdbArtworkSource;
   /**
    * Optional config for injection, so tests can supply a TMDB key without it
    * ever coming from `process.env`. Wiring only.
@@ -191,8 +194,22 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
   // episode list, never the meta (roadmap gate).
   const episodeService =
     overrides?.episodeService ?? new EpisodeService({ http, log });
+  // The artwork tier (Phase 4, TMDB). Constructed ONLY when a key is
+  // configured, so the gate "key unset -> everything else works identically" is
+  // structural rather than a runtime check buried in the source.
+  const artworkSource =
+    overrides?.artworkSource ??
+    (config.tmdbApiKey !== undefined ? new TmdbArtworkSource({ http, apiKey: config.tmdbApiKey, log }) : undefined);
   builder.defineMetaHandler(
-    createMetaHandler({ metaService, resolve: resolveService, episodes: episodeService }) as SdkMetaHandler,
+    createMetaHandler({
+      metaService,
+      resolve: resolveService,
+      episodes: episodeService,
+      // Conditional spread: exactOptionalPropertyTypes rejects passing an
+      // explicit undefined, and the distinction is load-bearing here — no key
+      // means no tier is wired at all, so the handler cannot call one.
+      ...(artworkSource !== undefined ? { artwork: artworkSource } : {}),
+    }) as SdkMetaHandler,
   );
 
   const app = express();
