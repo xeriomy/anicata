@@ -4,8 +4,10 @@ import type { ResolveService } from '../services/resolve.service.js';
 import { parseIncomingId } from '../identity/ids.js';
 import { mergeIdentity } from '../identity/merge.js';
 import { renderDetail } from '../render/detail.js';
+import { videosFromEpisodes } from '../render/videos.js';
 import type { StremioMetaDetail } from '../render/types.js';
-import type { AnimeIdentity } from '../domain/anime.js';
+import { stremioIdFor, type AnimeIdentity } from '../domain/anime.js';
+import type { EpisodeService } from '../services/episode.service.js';
 
 export type ParsedMetaId = { namespace: 'anilist' | 'kitsu'; value: string };
 
@@ -51,7 +53,6 @@ function minimalMeta(args: MetaArgs): StremioMetaDetail {
     id: args.id,
     type: args.type,
     name: 'Unavailable',
-    videos: [],
   };
   return full as StremioMetaDetail;
 }
@@ -59,6 +60,7 @@ function minimalMeta(args: MetaArgs): StremioMetaDetail {
 export function createMetaHandler(deps: {
   metaService: MetaService;
   resolve?: ResolveService;
+  episodes?: EpisodeService;
 }): (args: MetaArgs) => Promise<{ meta: StremioMetaDetail } & Cache> {
   return async (args: MetaArgs): Promise<{ meta: StremioMetaDetail } & Cache> => {
     try {
@@ -83,6 +85,14 @@ export function createMetaHandler(deps: {
       // resolver's HTTP layer directly.
       let canonical: string;
       let resolvedIdentity: AnimeIdentity | null = null;
+      // Episode enrichment (Phase 4). Started here, before any await, and keyed
+      // on the INBOUND namespace rather than the resolved one: the two tiers
+      // are independent, so a slow identity tier must not delay the episode
+      // fetch. `.catch` is attached eagerly so a failure that arrives while the
+      // request is still on the identity tier is never an unhandled rejection.
+      const episodeFetch: Promise<Record<string, unknown> | null> = deps.episodes
+        ? deps.episodes.episodesFor(parsed.ns, parsed.value).catch(() => null)
+        : Promise.resolve(null);
       if (deps.resolve === undefined) {
         // No identity tier wired: fetch as given.
         canonical = `${parsed.ns}:${parsed.value}`;
@@ -113,7 +123,15 @@ export function createMetaHandler(deps: {
         resolvedIdentity === null
           ? result.anime
           : { ...result.anime, identity: mergeIdentity(result.anime.identity, resolvedIdentity) };
-      return { meta: renderDetail(anime), cacheMaxAge: result.cacheMaxAge };
+      // Numbered from the canonical id of the anime actually being rendered, so
+      // a `mal:21` request that resolves to `anilist:21` emits `anilist:21:<key>`
+      // and a client following an id back lands on the same title.
+      const episodeBlock = await episodeFetch;
+      const videos =
+        episodeBlock === null
+          ? undefined
+          : videosFromEpisodes(stremioIdFor(anime.identity), episodeBlock);
+      return { meta: renderDetail(anime, videos), cacheMaxAge: result.cacheMaxAge };
     } catch {
       return { meta: minimalMeta(args), cacheMaxAge: 10 };
     }

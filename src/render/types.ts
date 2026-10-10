@@ -27,7 +27,13 @@ export interface StremioMetaDetail extends Omit<MetaDetail, 'videos'> {
   language?: string;
   audioLanguage?: string;
   hashtags?: string[];
-  videos: StremioMetaVideo[];
+  /**
+   * Present only when there is an episode list to send. Omitted rather than
+   * sent as `[]` because an empty array is a claim that the series has no
+   * episodes, which is not what "AniZip was unreachable" means (Phase 4;
+   * Phase 1 always emitted `[]`).
+   */
+  videos?: StremioMetaVideo[];
 }
 
 export interface StremioMetaVideo {

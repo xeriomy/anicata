@@ -12,7 +12,7 @@ export const TIER_SKIP_FLOOR_MS = 200;
 export const ANIZIP_TIER_CAP_MS = 900;
 
 const KITSU_API_BASE = 'https://kitsu.io/api/edge';
-const ANIZIP_API_BASE = 'https://api.ani.zip/mappings';
+export const ANIZIP_API_BASE = 'https://api.ani.zip/mappings';
 
 // Process-lifetime negative cache of AniZip 404s (see resolveFromAniZip).
 const anizipNegativeCache = new Set<string>();
@@ -20,7 +20,7 @@ const anizipNegativeCache = new Set<string>();
 // AniZip accepts one param per request. Combining params is unsafe: a duplicate
 // query key is answered with a real HTTP 500, so exactly one is ever sent.
 // The seven known params; anything else is never sent.
-const NS_TO_ANIZIP_PARAM: Record<string, string> = {
+export const NS_TO_ANIZIP_PARAM: Record<string, string> = {
   anilist: 'anilist_id',
   mal: 'mal_id',
   kitsu: 'kitsu_id',

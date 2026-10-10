@@ -8,6 +8,7 @@ import { buildManifest } from './addon/manifest.js';
 import { createCatalogHandler } from './addon/catalog.js';
 import { createMetaHandler } from './addon/meta.js';
 import { ResolveService } from './services/resolve.service.js';
+import { EpisodeService } from './services/episode.service.js';
 import { loadBundle } from './identity/bundle.js';
 import { loadAppConfig } from './config/index.js';
 import { HttpClient } from './net/http.js';
@@ -47,6 +48,8 @@ export interface AppDeps {
    * without the build artefact. Wiring only.
    */
   resolveService?: ResolveService;
+  /** Optional episode tier for injection. Wiring only (Phase 4). */
+  episodeService?: EpisodeService;
 }
 
 /**
@@ -115,9 +118,10 @@ const MANIFEST_CACHE_CONTROL = 'max-age=86400, public';
 
 // The SDK's declared meta signature. Our handler returns `StremioMetaDetail`,
 // which intentionally omits the SDK's required `MetaVideo.released` (Nuvio
-// renders `videos: []` without it) and carries the Nuvio-only spellings. The
-// runtime shape is what Nuvio parses; this alias documents the single boundary
-// where our accurate types meet the SDK's declared ones. No `any` involved.
+// renders with no `videos` key at all) and carries the Nuvio-only spellings.
+// The runtime shape is what Nuvio parses; this alias documents the single
+// boundary where our accurate types meet the SDK's declared ones. No `any`
+// involved.
 type SdkMetaHandler = (args: { type: ContentType; id: string }) => Promise<
   { meta: MetaDetail } & Cache
 >;
@@ -177,8 +181,13 @@ export function createApp(overrides?: Partial<AppDeps>): express.Express {
   // rather than failing startup, so this never takes the process down.
   const resolveService =
     overrides?.resolveService ?? new ResolveService({ http, bundle: loadBundle(IDENTITY_BUNDLE_PATH), log, cache });
-    builder.defineMetaHandler(
-    createMetaHandler({ metaService, resolve: resolveService }) as SdkMetaHandler,
+  // The episode tier. Separate budget from identity, fetched in parallel with
+  // it, and absent from the manifest entirely: a missing AniZip costs the
+  // episode list, never the meta (roadmap gate).
+  const episodeService =
+    overrides?.episodeService ?? new EpisodeService({ http, log });
+  builder.defineMetaHandler(
+    createMetaHandler({ metaService, resolve: resolveService, episodes: episodeService }) as SdkMetaHandler,
   );
 
   const app = express();

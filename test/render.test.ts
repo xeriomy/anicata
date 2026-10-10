@@ -84,8 +84,11 @@ describe('renderDetail', () => {
     expect(noMal.links!.map(l => l.category)).not.toContain('MyAnimeList');
   });
 
-  it('emits an empty videos array in Phase 1, never undefined', () => {
-    expect(d.videos).toEqual([]);
+  it('omits videos when the episode tier has nothing, never sending an empty array', () => {
+    // Phase 1 emitted `[]` unconditionally. Phase 4 changed the contract: an
+    // empty array is a claim that the series has no episodes, which is a
+    // different statement from "the episode fetch produced nothing".
+    expect(d.videos).toBeUndefined();
   });
 
   it('omits runtime rather than inventing one when duration is unknown', () => {

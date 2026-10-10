@@ -1,6 +1,6 @@
 import type { Anime, AnimeIdentity } from '../domain/anime.js';
 import { renderPreview } from './preview.js';
-import type { StremioMetaDetail } from './types.js';
+import type { StremioMetaDetail, StremioMetaVideo } from './types.js';
 
 /**
  * Same widening as `preview.ts` (`type: 'anime'`, `posterShape: 'poster'`),
@@ -24,7 +24,7 @@ function stripUndefined<T extends object>(value: T): T {
   return out as unknown as T;
 }
 
-export function renderDetail(a: Anime): StremioMetaDetail {
+export function renderDetail(a: Anime, videos?: StremioMetaVideo[]): StremioMetaDetail {
   const preview = renderPreview(a);
   const language = a.countryOfOrigin === 'JP' ? 'ja' : undefined;
   const full: DetailOut = {
@@ -42,7 +42,9 @@ export function renderDetail(a: Anime): StremioMetaDetail {
     hashtags: a.hashtags,
     awards: undefined,
     links: buildLinks(a.identity),
-    videos: [],
+    // Phase 4 episodes. Omitted when the tier produced nothing, so a title
+    // whose episode data could not be had does not claim to have no episodes.
+    ...(videos !== undefined && videos.length > 0 ? { videos } : {}),
   };
   return stripUndefined(full) as StremioMetaDetail;
 }
