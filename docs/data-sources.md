@@ -135,6 +135,48 @@ countryOfOrigin_not, sort
 `Page` also exposes `airingSchedules` (args include `mediaId`, `episode`,
 `airingAt_greater`, `episode_greater`, `sort`) ✅ — useful for airing calendars.
 
+#### 1.3.1 Filtered catalogue queries — live-verified 2026-10-11 ✅
+
+Every shape the Phase 5 catalogue expansion needs, probed against
+`https://graphql.anilist.co` on 2026-10-11 (probe scripts in
+`/tmp/opencode/probe-anilist-*.mjs` during planning; the airing
+capture is committed as `test/fixtures/catalog-airing.json`):
+
+| shape | result |
+|---|---|
+| `sort: ['POPULARITY_DESC']` | 200, 50 items |
+| `POPULARITY_DESC` + `status: RELEASING` | 200, every item `RELEASING` |
+| `POPULARITY_DESC` + `status: NOT_YET_RELEASED` | 200 |
+| `START_DATE_DESC` + `status: RELEASING` | 200 |
+| `POPULARITY_DESC` + `format: MOVIE` | 200, every item `format: MOVIE` |
+| `POPULARITY_DESC` + `format_in: ['OVA','ONA']` | 200, only `OVA`/`ONA` |
+| `POPULARITY_DESC` + `season: FALL` + `seasonYear: 2026` | 200, every item `season: FALL/2026` |
+| `POPULARITY_DESC` + `genre: 'Action'` | 200, every item carries `Action` |
+| `TRENDING_DESC`/`SCORE_DESC` + `format: MOVIE` | 200 |
+| `SEARCH_MATCH` + `search` + `format: MOVIE` | 200, every item `MOVIE` |
+
+The traps the probes caught:
+
+1. **The GraphQL arg is `format_in`, not `formatIn`.**
+   `formatIn: $formatIn` returned 400:
+   `Unknown argument "formatIn" on field "media" of type "Page". Did you mean "format", "format_in", …`.
+2. **A declared variable must be wired into `media(...)`, or AniList 400s**
+   (`Variable "$genre" is never used`) — and, worse, an *undeclared*
+   variable is silently ignored: the old `CATALOG_QUERY` never declared
+   `$genre`, so sending `genre: 'Action'` returned the **unfiltered**
+   page (probe: first page of `POPULARITY_DESC`, no item necessarily
+   carrying `Action`). Genre filtering has therefore never worked
+   end-to-end; the Phase 5 wired query string is the fix.
+3. **An absent variable is `null` = no filter.** `$format`
+   declared+wired but not passed returned all 40 search results across
+   every format; all six contradictory filters at once returned
+   `total: 0`, a 200, not an error. So one query string may declare
+   every optional arg and the adapter passes only the descriptor's
+   present fields.
+
+Also confirmed: `pageInfo.total` is 5000 on every filtered query
+(design §3 — never derive page counts from it).
+
 ### 1.4 Cross-source IDs — **definitive answer** ✅
 
 | ID | Available from AniList alone? | Evidence |
