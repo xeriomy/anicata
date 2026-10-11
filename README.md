@@ -35,10 +35,13 @@ back for catalog pages and meta. No configuration page and no sign-up —
 add-on never sees a setup form.
 
 > **One operator-side setting exists:** `TMDB_API_KEY`, an optional
-> *self-host* setting that adds logos and backdrops to meta. It is read from
-> the environment and is never sent to a client, so there is no way for a user
-> to supply it and no key is needed to run the add-on. See
-> [Environment](#environment) below.
+> *self-host* setting that adds logos/backdrops. **But before you use it, read
+> this:** Nuvio already fetches TMDB logos, backdrops and episode stills itself,
+> using a key the *user* sets in Nuvio's own TMDB settings, and **its artwork
+> overrides ours** (`verified: docs/nuvio-internals.md` §2). So our TMDB tier is
+> a fallback for users who have *not* configured TMDB in Nuvio — not the
+> primary path. Usually the better answer is to set the key in Nuvio and leave
+> ours unset.
 
 > `?titleLang=` is **not a working option.** `parseRequestConfig`
 > (`src/config/index.ts`) exists and is unit-tested, but the SDK router

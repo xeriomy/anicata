@@ -204,7 +204,9 @@ other clients working.
 
 ### 6.7 Nuvio's meta budget is 5 seconds
 
-✅ `MetaDetailsRepository.FETCH_TIMEOUT_MS = 5_000L`. Exceed it and Nuvio silently
+✅ `MetaDetailsRepository.FETCH_TIMEOUT_MS = 5_000L`
+(`MetaDetailsRepository.kt:272`, verified against NuvioMedia/NuvioMobile on 2026-10-11 —
+see `docs/nuvio-internals.md`). Exceed it and Nuvio silently
 skips our add-on for that item.
 
 This single number sets every timeout in our architecture
