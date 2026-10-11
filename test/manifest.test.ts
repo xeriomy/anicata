@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { seasonalCatalogId } from '../src/sources/catalog-def.js';
 import { addonBuilder, type Manifest } from 'stremio-addon-sdk';
 import { buildManifest, assertManifestFits, ADDON_ID, ADDON_NAME } from '../src/addon/manifest.js';
 
@@ -41,12 +42,11 @@ describe('buildManifest', () => {
     ).toBeUndefined();
   });
 
-  it('declares exactly the three Phase 1 catalogues', () => {
-    expect(m.catalogs!.map((c) => c.id).sort()).toEqual([
-      'anime-search',
-      'anime-top-rated',
-      'anime-trending',
-    ]);
+  it('declares the Phase 5 catalogue set, including the current season', () => {
+    // 14 fixed catalogues plus the generated seasonal one, which carries the
+    // season+year so the cache key rotates at the boundary.
+    expect(m.catalogs!.map((c) => c.id)).toContain(seasonalCatalogId(new Date()));
+    expect(m.catalogs!.length).toBe(15);
   });
 
   it('gives every browse catalogue a skip extra and no required extra, so all reach Home', () => {
@@ -64,9 +64,11 @@ describe('buildManifest', () => {
     }
   });
 
-  it('declares search on exactly one catalogue, because Nuvio fans out per catalogue', () => {
+  it('declares search on exactly one catalogue per type, because Nuvio fans out per catalogue', () => {
     const searchable = m.catalogs!.filter((c) => c.extra!.some((e) => e.name === 'search'));
-    expect(searchable.map((c) => c.id)).toEqual(['anime-search']);
+    // One per resource type: Nuvio routes search on /catalog/{type}/{id}, so a
+    // movie type needs its own searchable catalogue to be searchable at all.
+    expect(searchable.map((c) => c.id).sort()).toEqual(['anime-search', 'movie-search']);
   });
 
   it('marks search required on the search catalogue, so it only appears on Search', () => {
@@ -75,19 +77,23 @@ describe('buildManifest', () => {
     // query is typed. `isRequired: true` on the search extra tells the client
     // this catalogue exists only for searching (SDK manifest docs), so it is
     // requested for search and never for a feed.
-    const searchCatalog = m.catalogs!.find((c) => c.id === 'anime-search');
-    expect(searchCatalog).toBeDefined();
+    // One per resource type: Nuvio routes search on /catalog/{type}/{id}, so a
+    // movie type needs its own searchable catalogue to be searchable at all.
+    const searchCatalogues = m.catalogs!.filter((c) => c.extra!.some((e) => e.name === 'search'));
+    expect(searchCatalogues.map((c) => c.id).sort()).toEqual(['anime-search', 'movie-search']);
+    for (const c of searchCatalogues) {
+      const searchExtra = c.extra!.find((e) => e.name === 'search');
+      expect(searchExtra?.isRequired, c.id).toBe(true);
+      // And `skip` stays, so search results still paginate.
+      expect(c.extra!.some((e) => e.name === 'skip'), c.id).toBe(true);
+    }
 
-    const searchExtra = searchCatalog!.extra!.find((e) => e.name === 'search');
-    expect(searchExtra).toBeDefined();
-    expect(searchExtra!.isRequired).toBe(true);
-
-    // The other catalogues must NOT mark search required, or they would
+    // Every other catalogue must NOT mark search required, or it would
     // disappear from Home.
     for (const c of m.catalogs!) {
-      if (c.id === 'anime-search') continue;
+      if (searchCatalogues.includes(c)) continue;
       const e = (c.extra ?? []).find((x) => x.name === 'search');
-      expect(e?.isRequired).not.toBe(true);
+      expect(e?.isRequired, c.id).not.toBe(true);
     }
   });
 

@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { AniListSource } from '../src/sources/anilist/adapter.js';
-import { CATALOG_DEFS, PAGE_SIZE, ANILIST_PER_PAGE } from '../src/sources/catalog-def.js';
+import { CATALOG_DEFS, PAGE_SIZE, ANILIST_PER_PAGE, catalogDefFor } from '../src/sources/catalog-def.js';
 import { CATALOG_QUERY, SEARCH_QUERY } from '../src/sources/anilist/queries.js';
 import type { SourceErrorKind } from '../src/domain/errors.js';
 import { SourceError } from '../src/domain/errors.js';
@@ -242,9 +242,22 @@ describe('AniListSource per-attempt timeout', () => {
 });
 
 describe('catalog definitions', () => {
-  it('declares exactly three Phase 1 catalogues, all type anime', () => {
-    expect(Object.keys(CATALOG_DEFS).sort()).toEqual(['anime-search', 'anime-top-rated', 'anime-trending']);
-    for (const c of Object.values(CATALOG_DEFS)) expect(c.type).toBe('anime');
+  it('declares fourteen fixed catalogs across both types (Phase 5)', () => {
+    // Phase 1 shipped three anime-only catalogues. Phase 5 adds nine anime
+    // catalogues (two of which carry a genre filter) and three movie-type ones.
+    expect(Object.keys(CATALOG_DEFS)).toHaveLength(14);
+    for (const c of Object.values(CATALOG_DEFS)) {
+      expect(['anime', 'movie'], c.id).toContain(c.type);
+    }
+    const byType = Object.values(CATALOG_DEFS).reduce<Record<string, number>>((acc, c) => {
+      acc[c.type] = (acc[c.type] ?? 0) + 1;
+      return acc;
+    }, {});
+    expect(byType).toEqual({ anime: 11, movie: 3 });
+    // The seasonal catalogue is generated, so it is not in the fixed registry.
+    // Indexed through the resolver, which is the only public lookup.
+    expect(catalogDefFor('anime-seasonal-2026-summer')).toMatchObject({ id: 'anime-seasonal-2026-summer' });
+    expect(Object.keys(CATALOG_DEFS)).not.toContain('anime-seasonal-2026-summer');
   });
 
   it('marks only anime-search as searchable', () => {

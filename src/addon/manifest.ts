@@ -4,7 +4,13 @@ import type {
   ManifestCatalog,
   ShortManifestResource,
 } from 'stremio-addon-sdk';
-import { CATALOG_DEFS } from '../sources/catalog-def.js';
+import {
+  CATALOG_DEFS,
+  GENRE_OPTIONS,
+  catalogDefFor,
+  seasonalCatalogId,
+  type CatalogDefinition,
+} from '../sources/catalog-def.js';
 
 /**
  * The SDK's `ContentType` union is `"movie" | "series" | "channel" | "tv"` and has no
@@ -45,6 +51,25 @@ export type AniCataManifest = Omit<Manifest, 'types' | 'resources' | 'catalogs' 
   logo: string;
 };
 
+/**
+ * The `extra` entries Nuvio may send for a catalogue.
+ *
+ * The genre picker is declared here rather than invented per request: with
+ * `options` present Nuvio renders a picker instead of a free-text field, which
+ * is what stops a user-supplied genre string reaching AniList's exact-match
+ * filter — a miss there is a silent empty page, not an error.
+ */
+function buildExtra(def: CatalogDefinition): AniCataManifestCatalog['extra'] {
+  const extra: AniCataManifestCatalog['extra'] = [{ name: 'skip' }];
+  if (def.supportsGenre) {
+    extra.push({ name: 'genre', options: [...GENRE_OPTIONS] });
+  }
+  if (def.supportsSearch) {
+    extra.push({ name: 'search', isRequired: true });
+  }
+  return extra;
+}
+
 export const ADDON_ID = 'org.anicata.anime';
 export const ADDON_NAME = 'AniCata Anime';
 
@@ -72,19 +97,28 @@ export function buildManifest(version: string): AniCataManifest {
       'catalog',
       { name: 'meta', types: ['anime', 'movie'], idPrefixes: ['anilist:', 'kitsu:'] },
     ],
-    catalogs: Object.values(CATALOG_DEFS).map((def): AniCataManifestCatalog => ({
-      type: def.type,
-      id: def.id,
-      name: def.name,
-      // `isRequired: true` on the search extra is what keeps this catalogue off
-      // the Home/Board. Without it the client also treats the catalogue as a
-      // feed, publishes a "Search Anime" row, and that row returns an
-      // unfiltered page until a query is typed — which is exactly what a search
-      // catalogue is not for. `skip` stays so search results still paginate.
-      extra: def.supportsSearch
-        ? [{ name: 'skip' }, { name: 'search', isRequired: true }]
-        : [{ name: 'skip' }],
-    })),
+    catalogs: [
+      ...Object.values(CATALOG_DEFS).map((def): AniCataManifestCatalog => ({
+        type: def.type,
+        id: def.id,
+        name: def.name,
+        // `isRequired: true` on the search extra is what keeps this catalogue off
+        // the Home/Board. Without it the client also treats the catalogue as a
+        // feed, publishes a "Search Anime" row, and that row returns an
+        // unfiltered page until a query is typed — which is exactly what a search
+        // catalogue is not for. `skip` stays so search results still paginate.
+        extra: buildExtra(def),
+      })),
+      // The seasonal catalogue is generated (its id carries the season+year), so
+      // it is appended rather than looked up. Only the CURRENT one is published:
+      // a client installed in one season learns the next id on its next manifest
+      // fetch, which is at most a day after the boundary.
+      ...((): AniCataManifestCatalog[] => {
+        const seasonal = catalogDefFor(seasonalCatalogId());
+        if (seasonal === undefined) return [];
+        return [{ type: seasonal.type, id: seasonal.id, name: seasonal.name, extra: buildExtra(seasonal) }];
+      })(),
+    ],
     behaviorHints: {
       configurable: false,
       configurationRequired: false,
