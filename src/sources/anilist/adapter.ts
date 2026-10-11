@@ -5,7 +5,8 @@ import type { TokenBucket } from '../../net/limiter.js';
 import type { Logger } from '../../util/logger.js';
 import type { AniListMedia, AniListGraphQLResponse, AniListPage } from './types.js';
 import { CATALOG_QUERY, META_QUERY, SEARCH_QUERY } from './queries.js';
-import { ANILIST_PER_PAGE } from '../catalog-def.js';
+import { ANILIST_PER_PAGE, parseSeasonalCatalogId } from '../catalog-def.js';
+import type { Season } from '../catalog-def.js';
 import type { AnimeSource, PageRequest, SourcePage, SourceId, SortKey } from '../types.js';
 import { normalizeMedia } from '../../normalize/anime.js';
 import { DEFAULT_ANILIST_URL } from '../../config/index.js';
@@ -51,17 +52,87 @@ function sortForKey(key: SortKey): string[] {
       return ['SCORE_DESC'];
     case 'search_match':
       return ['SEARCH_MATCH'];
+    case 'popular':
+      // POPULARITY_DESC is a different AniList sort from TRENDING_DESC.
+      return ['POPULARITY_DESC'];
+    case 'recent':
+      return ['START_DATE_DESC'];
   }
 }
 
-function sortForCatalog(catalogId: string): string[] {
-  if (catalogId === 'anime-top-rated') {
-    return sortForKey('top_rated');
+export type CatalogStatus = 'RELEASING' | 'NOT_YET_RELEASED';
+export type CatalogFormat = 'MOVIE' | 'OVA' | 'ONA';
+export type AniListSeason = 'WINTER' | 'SPRING' | 'SUMMER' | 'FALL';
+
+/**
+ * One catalogue's curated query: its sort plus the status/format/season
+ * filters it pins (Phase 5 §2). Expanded into AniList variables in
+ * `fetchPage`; a field that is absent here is OMITTED from `variables`
+ * (never sent as null) — AniList treats an absent variable as no filter.
+ */
+export interface CatalogQuery {
+  sort: SortKey;
+  status?: CatalogStatus;
+  format?: CatalogFormat;
+  formatIn?: readonly CatalogFormat[];
+  /** Always sent as a pair; the seasonal catalogue id is their transport. */
+  season?: AniListSeason;
+  seasonYear?: number;
+}
+
+const ANILIST_SEASON: Record<Season, AniListSeason> = {
+  winter: 'WINTER',
+  spring: 'SPRING',
+  summer: 'SUMMER',
+  fall: 'FALL',
+};
+
+/**
+ * Design §2's descriptor table. Any id that matches no row — including an
+ * unparsable `anime-seasonal-*` — gets the Phase 1 default `{sort:'trending'}`:
+ * the service gate makes that unreachable in production, so this stays dumb
+ * rather than consulting a clock.
+ */
+export function queryForCatalog(catalogId: string): CatalogQuery {
+  switch (catalogId) {
+    case 'anime-trending':
+      return { sort: 'trending' };
+    case 'anime-top-rated':
+    case 'anime-top-genres':
+      return { sort: 'top_rated' };
+    case 'anime-search':
+      return { sort: 'search_match' };
+    case 'anime-popular':
+    case 'anime-genres':
+      return { sort: 'popular' };
+    case 'anime-airing':
+      return { sort: 'popular', status: 'RELEASING' };
+    case 'anime-upcoming':
+      return { sort: 'popular', status: 'NOT_YET_RELEASED' };
+    case 'anime-recent':
+      return { sort: 'recent', status: 'RELEASING' };
+    case 'anime-movies':
+      return { sort: 'popular', format: 'MOVIE' };
+    case 'anime-ova':
+      return { sort: 'popular', formatIn: ['OVA', 'ONA'] };
+    case 'movie-trending':
+      return { sort: 'trending', format: 'MOVIE' };
+    case 'movie-top-rated':
+      return { sort: 'top_rated', format: 'MOVIE' };
+    case 'movie-search':
+      return { sort: 'search_match', format: 'MOVIE' };
+    default: {
+      const seasonal = parseSeasonalCatalogId(catalogId);
+      if (seasonal === undefined) {
+        return { sort: 'trending' };
+      }
+      return {
+        sort: 'popular',
+        season: ANILIST_SEASON[seasonal.season],
+        seasonYear: seasonal.year,
+      };
+    }
   }
-  if (catalogId === 'anime-search') {
-    return sortForKey('search_match');
-  }
-  return sortForKey('trending');
 }
 
 export class AniListSource implements AnimeSource {
@@ -82,17 +153,33 @@ export class AniListSource implements AnimeSource {
   }
 
   async fetchPage(req: PageRequest): Promise<SourcePage> {
-    const sort = sortForCatalog(req.catalogId);
+    const q = queryForCatalog(req.catalogId);
     const collected: Anime[] = [];
     let total = 0;
     let page = Math.floor(req.skip / ANILIST_PER_PAGE) + 1;
     let offset = req.skip % ANILIST_PER_PAGE;
     while (collected.length < req.limit) {
+      // Absent descriptor fields are OMITTED, never sent as null: an absent
+      // variable is null = no filter (verified 2026-10-11). `formatIn` is
+      // copied because `format_in` takes a list; season travels as a pair.
       const variables: Record<string, unknown> = {
         perPage: ANILIST_PER_PAGE,
         page,
-        sort,
+        sort: sortForKey(q.sort),
       };
+      if (q.status !== undefined) {
+        variables.status = q.status;
+      }
+      if (q.format !== undefined) {
+        variables.format = q.format;
+      }
+      if (q.formatIn !== undefined) {
+        variables.formatIn = [...q.formatIn];
+      }
+      if (q.season !== undefined && q.seasonYear !== undefined) {
+        variables.season = q.season;
+        variables.seasonYear = q.seasonYear;
+      }
       if (req.genre !== undefined) {
         variables.genre = req.genre;
       }

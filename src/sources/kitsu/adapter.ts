@@ -70,7 +70,16 @@ class CallBudget {
   }
 }
 
-export function kitsuSort(sort: SortKey): string {
+/**
+ * Kitsu's sort vocabulary, mapped explicitly from the three SortKeys it can
+ * express. Phase 5 grew `SortKey` with 'popular' and 'recent' for AniList
+ * (`POPULARITY_DESC` / `START_DATE_DESC`); Kitsu has no equivalent criteria —
+ * only `average_rating`, `userCount` and `popularityRank` are accepted
+ * (verified 2026-10-07) — so the parity gap is documented in this signature
+ * rather than papered over with an invented mapping. Kitsu's own
+ * `sortForCatalog` never produces those two keys (plan §non-goal).
+ */
+export function kitsuSort(sort: Exclude<SortKey, 'popular' | 'recent'>): string {
   switch (sort) {
     case 'top_rated':
       return '-averageRating';

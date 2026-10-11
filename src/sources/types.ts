@@ -1,7 +1,9 @@
 import type { Anime } from '../domain/anime.js';
 
 export type SourceId = 'anilist' | 'kitsu';
-export type SortKey = 'trending' | 'top_rated' | 'search_match';
+// 'popular' and 'recent' are distinct from 'trending': AniList's
+// POPULARITY_DESC and TRENDING_DESC are different sorts (Phase 5 §2).
+export type SortKey = 'trending' | 'top_rated' | 'search_match' | 'popular' | 'recent';
 
 export interface PageRequest {
   catalogId: string;

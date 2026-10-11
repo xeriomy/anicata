@@ -128,13 +128,25 @@ export const CATALOG_DEFS: Record<FixedCatalogId, CatalogDefinition> = {
 export function catalogDefFor(id: string): CatalogDefinition | undefined {
   const fixed = CATALOG_DEFS[id as FixedCatalogId];
   if (fixed !== undefined) return fixed;
+  const seasonal = parseSeasonalCatalogId(id);
+  if (seasonal === undefined) return undefined;
+  return { id: id as CatalogId, type: 'anime', name: `${capitalise(seasonal.season)} ${seasonal.year} Anime`, supportsSearch: false };
+}
+
+/**
+ * Parses `anime-seasonal-<year>-<season>` into its season pair, or `undefined`
+ * when the id is not a parsable seasonal id.
+ *
+ * The exported seam for the AniList adapter's season/seasonYear descriptor
+ * fields (Phase 5 Task 2): the regex stays private here, and the caller
+ * uppercases the `Season` to AniList's spelling.
+ */
+export function parseSeasonalCatalogId(id: string): { season: Season; year: number } | undefined {
   const match = SEASONAL_ID_RE.exec(id);
   if (match === null) return undefined;
-  const year = Number(match[1]);
-  const season = match[2] as Season;
   // The regex has already established the shape, so this is the one place the
-  // runtime match is narrowed to the template-literal id type.
-  return { id: id as CatalogId, type: 'anime', name: `${capitalise(season)} ${year} Anime`, supportsSearch: false };
+  // runtime match is narrowed to the `Season` type.
+  return { season: match[2] as Season, year: Number(match[1]) };
 }
 
 /**
