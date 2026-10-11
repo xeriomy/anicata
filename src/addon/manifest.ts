@@ -76,8 +76,13 @@ export function buildManifest(version: string): AniCataManifest {
       type: def.type,
       id: def.id,
       name: def.name,
+      // `isRequired: true` on the search extra is what keeps this catalogue off
+      // the Home/Board. Without it the client also treats the catalogue as a
+      // feed, publishes a "Search Anime" row, and that row returns an
+      // unfiltered page until a query is typed — which is exactly what a search
+      // catalogue is not for. `skip` stays so search results still paginate.
       extra: def.supportsSearch
-        ? [{ name: 'skip' }, { name: 'search' }]
+        ? [{ name: 'skip' }, { name: 'search', isRequired: true }]
         : [{ name: 'skip' }],
     })),
     behaviorHints: {

@@ -49,16 +49,46 @@ describe('buildManifest', () => {
     ]);
   });
 
-  it('gives every catalogue a skip extra and no required extra, so all reach Home', () => {
+  it('gives every browse catalogue a skip extra and no required extra, so all reach Home', () => {
+    const searchOnly = (c: (typeof m.catalogs)[number]): boolean =>
+      (c.extra ?? []).some((e) => e.name === 'search' && e.isRequired === true);
+
     for (const c of m.catalogs!) {
       expect(c.extra!.some((e) => e.name === 'skip')).toBe(true);
-      expect(c.extra!.every((e) => e.isRequired !== true)).toBe(true);
+      // Everything EXCEPT the search-only catalogue must be unrequired, or it
+      // would not appear on Home. The search catalogue is the one exception,
+      // asserted below.
+      if (!searchOnly(c)) {
+        expect(c.extra!.every((e) => e.isRequired !== true)).toBe(true);
+      }
     }
   });
 
   it('declares search on exactly one catalogue, because Nuvio fans out per catalogue', () => {
     const searchable = m.catalogs!.filter((c) => c.extra!.some((e) => e.name === 'search'));
     expect(searchable.map((c) => c.id)).toEqual(['anime-search']);
+  });
+
+  it('marks search required on the search catalogue, so it only appears on Search', () => {
+    // A searchable-but-feedable catalogue is ALSO published to Home, which puts
+    // a "Search Anime" row on the Board that returns an unfiltered feed until a
+    // query is typed. `isRequired: true` on the search extra tells the client
+    // this catalogue exists only for searching (SDK manifest docs), so it is
+    // requested for search and never for a feed.
+    const searchCatalog = m.catalogs!.find((c) => c.id === 'anime-search');
+    expect(searchCatalog).toBeDefined();
+
+    const searchExtra = searchCatalog!.extra!.find((e) => e.name === 'search');
+    expect(searchExtra).toBeDefined();
+    expect(searchExtra!.isRequired).toBe(true);
+
+    // The other catalogues must NOT mark search required, or they would
+    // disappear from Home.
+    for (const c of m.catalogs!) {
+      if (c.id === 'anime-search') continue;
+      const e = (c.extra ?? []).find((x) => x.name === 'search');
+      expect(e?.isRequired).not.toBe(true);
+    }
   });
 
   it('points logo at a path our own server serves', () => {
