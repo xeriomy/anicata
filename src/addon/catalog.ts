@@ -54,7 +54,7 @@ export function createCatalogHandler(deps: {
       // searchable too, and it must carry its own id so the adapter can
       // filter format: MOVIE.
       const def = catalogDefFor(args.id);
-      if (search !== undefined && def?.supportsSearch === true) {
+      if (search !== undefined && def?.supportsSearch === true && def.type === args.type) {
         const result = await deps.catalogService.search({ term: search, skip, catalogId: args.id });
         return { metas: result.items.map(renderPreview), cacheMaxAge: result.cacheMaxAge };
       }

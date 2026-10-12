@@ -34,6 +34,15 @@
 
 ### 2.1 Curated browse catalogs (Phase 1/5) — `type: anime`
 
+> **Superseded (2026-10-13, Phase 5).** The tables in §2.1–§2.2 are the
+> Phase-1-era shapes; the shipped registry is `src/sources/catalog-def.ts` —
+> 14 fixed ids (incl. `movie-trending`, `movie-top-rated`, `movie-search`)
+> plus a generated seasonal id — as tabulated in the Phase 5 spec §2
+> (`docs/superpowers/specs/2026-10-11-phase-5-catalogue-expansion-design.md`).
+> Notably `anime-recent` is `START_DATE_DESC` + `status: RELEASING`
+> ("Recently Aired"), not `FINISHED` + `startDate_greater`. Historical prose
+> kept for the record; do not re-derive catalog shapes from it.
+
 | # | `id` | `name` | AniList query | `extra` |
 |---|---|---|---|---|
 | 1 | `anime-trending` | Trending | `sort: TRENDING_DESC` | `skip` |
@@ -49,6 +58,10 @@
 Plus a season catalog, handled specially in §4.
 
 ### 2.2 `type: movie` catalogs
+
+> **Superseded (2026-10-13, Phase 5).** The movie rows are now
+> `movie-trending`, `movie-top-rated`, `movie-search` — see the note atop
+> §2.1.
 
 | `id` | `name` | AniList query | `extra` |
 |---|---|---|---|

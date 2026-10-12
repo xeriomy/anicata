@@ -4,7 +4,7 @@ import { HttpClient } from '../../src/net/http.js';
 import { TokenBucket } from '../../src/net/limiter.js';
 
 // Opt-in only: `npm test` stays offline. Run once with
-// `ANICATA_LIVE=1 npx vitest run --dir test/live` (~9 AniList requests
+// `ANICATA_LIVE=1 npm run test:live` (~9 AniList requests
 // total: ~5 here + 4 in phase5-filters.live.test.ts — still well under
 // the 30 req/min live limit — do not add more tests here).
 const live = process.env.ANICATA_LIVE === '1' ? describe : describe.skip;

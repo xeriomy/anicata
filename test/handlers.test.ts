@@ -113,6 +113,14 @@ describe('createCatalogHandler', () => {
     expect((service.search as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
   });
 
+  it('does not search when the route type does not match the catalogue def: type mismatch must not search', async () => {
+    const service = fakeService();
+    const handler = createCatalogHandler({ catalogService: service });
+    await handler({ type: 'movie', id: 'anime-search', extra: { search: 'one piece' } });
+    expect((service.search as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
+    expect((service.getCatalogPage as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1);
+  });
+
   it('never throws: returns empty metas with a short cache on upstream failure', async () => {
     const service = fakeService({
       getCatalogPage: vi.fn(async () => { throw new Error('upstream down'); }),

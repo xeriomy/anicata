@@ -93,6 +93,19 @@ captured from AniList's own `GenreCollection` where possible so the list is not
 guessed. Any option added later must be verified against that collection, and a
 test pins the list so a typo cannot ship.
 
+**Ruling (2026-10-13, controller): the genre picker ships on exactly
+`anime-genres` and `anime-top-genres`.** The "(and the two movie rows)"
+parenthetical in the first bullet above is resolved against the roadmap's
+§Scope ("Genre catalogs: `anime-genres`, `anime-top-genres`") and
+`docs/catalog-design.md` §3.2, which deliberately keeps the picker to two
+genre-bearing catalogues so Discover cannot burn one request per catalogue
+browse. The size arithmetic points the same way: a genre extra on both movie
+rows would add ~460 B to a manifest that is 2276 B of the 8192 B budget
+(~5.9 kB headroom) — affordable, but never intended. The shipped manifest test
+pins exactly two genre-bearing catalogues; the movie rows carry no genre
+extra. This resolves the ambiguity rather than restating the spec: the
+parenthetical is superseded.
+
 ## 5. The seasonal catalogue and the season boundary
 
 `anime-seasonal` needs the *current* season. AniList accepts `season` +
