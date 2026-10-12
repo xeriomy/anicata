@@ -196,15 +196,33 @@ export class AniListSource implements AnimeSource {
     return { items: collected.slice(0, req.limit), total };
   }
 
-  async search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage> {
+  async search(
+    term: string,
+    skip: number,
+    limit: number,
+    timeoutMs?: number,
+    catalogId?: string,
+  ): Promise<SourcePage> {
     const page = Math.floor(skip / ANILIST_PER_PAGE) + 1;
     const offset = skip % ANILIST_PER_PAGE;
-    const body = await this.post<CatalogResponse>(SEARCH_QUERY, {
+    // Same descriptor table as fetchPage: a catalogue id decides the sort and
+    // any format filter (movie-search ⇒ format: MOVIE). A legacy call with no
+    // catalogue keeps the bare SEARCH_MATCH search. Only `format` is lifted
+    // into the variables — a search term replaces, not combines with, the
+    // descriptor's other filters.
+    const q: CatalogQuery =
+      catalogId !== undefined ? queryForCatalog(catalogId) : { sort: 'search_match' };
+    const variables: Record<string, unknown> = {
       search: term,
       perPage: ANILIST_PER_PAGE,
       page,
-      sort: sortForKey('search_match'),
-    }, timeoutMs);
+      sort: sortForKey(q.sort),
+    };
+    // Absent ⇒ the key is OMITTED, never sent as null (same rule as fetchPage).
+    if (q.format !== undefined) {
+      variables.format = q.format;
+    }
+    const body = await this.post<CatalogResponse>(SEARCH_QUERY, variables, timeoutMs);
     const res = this.toPageResult(body);
     return { items: res.items.slice(offset, offset + limit), total: res.total };
   }

@@ -73,9 +73,12 @@ export class SourceChain {
     skip: number,
     limit: number,
     stickyKey?: string,
+    catalogId?: string,
   ): Promise<ChainResult> {
     return this.execute(stickyKey, (source, remainingMs) =>
-      source.search(term, skip, limit, remainingMs),
+      // The catalogue id is appended only when present: an explicit undefined
+      // would break call sites that pin the legacy 4-arg shape.
+      source.search(term, skip, limit, remainingMs, ...(catalogId !== undefined ? [catalogId] : [])),
     );
   }
 

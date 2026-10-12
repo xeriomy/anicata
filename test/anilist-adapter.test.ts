@@ -335,6 +335,35 @@ describe('AniListSource.search', () => {
     expect(sent.query).toBe(SEARCH_QUERY);
     expect(sent.variables.search).toBe('cowboy bebop');
   });
+
+  it('sends format MOVIE with SEARCH_MATCH sort for the movie-search catalogue', async () => {
+    const d = deps([load('./fixtures/catalog-search.json')]);
+    await new AniListSource(d).search('one piece', 0, 10, 5000, 'movie-search');
+    const sent = JSON.parse(String(d._getJson.mock.calls[0]![1]!.body));
+    expect(sent.query).toBe(SEARCH_QUERY);
+    expect(sent.variables.format).toBe('MOVIE');
+    expect(sent.variables.sort).toEqual(['SEARCH_MATCH']);
+  });
+
+  it('sends no format variable for the anime-search catalogue', async () => {
+    const d = deps([load('./fixtures/catalog-search.json')]);
+    await new AniListSource(d).search('one piece', 0, 10, 5000, 'anime-search');
+    const sent = JSON.parse(String(d._getJson.mock.calls[0]![1]!.body));
+    expect(sent.query).toBe(SEARCH_QUERY);
+    expect('format' in sent.variables).toBe(false);
+  });
+
+  it('a legacy call with no catalogue sends exactly {search, perPage, page, sort}', async () => {
+    const d = deps([load('./fixtures/catalog-search.json')]);
+    await new AniListSource(d).search('one piece', 0, 10);
+    const sent = JSON.parse(String(d._getJson.mock.calls[0]![1]!.body));
+    expect(sent.variables).toEqual({
+      search: 'one piece',
+      perPage: ANILIST_PER_PAGE,
+      page: 1,
+      sort: ['SEARCH_MATCH'],
+    });
+  });
 });
 
 describe('AniListSource.fetchById', () => {

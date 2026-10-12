@@ -1,4 +1,5 @@
 import type { CatalogService } from '../services/catalog.service.js';
+import { catalogDefFor } from '../sources/catalog-def.js';
 import { renderPreview } from '../render/preview.js';
 import type { StremioMetaPreview } from '../render/types.js';
 
@@ -49,8 +50,12 @@ export function createCatalogHandler(deps: {
   return async (args: CatalogArgs): Promise<{ metas: StremioMetaPreview[]; cacheMaxAge: number }> => {
     try {
       const { search, genre, skip } = parseExtra(args.extra);
-      if (search !== undefined && args.id === 'anime-search') {
-        const result = await deps.catalogService.search({ term: search, skip });
+      // The def routes the search, not a hardcoded id: movie-search is
+      // searchable too, and it must carry its own id so the adapter can
+      // filter format: MOVIE.
+      const def = catalogDefFor(args.id);
+      if (search !== undefined && def?.supportsSearch === true) {
+        const result = await deps.catalogService.search({ term: search, skip, catalogId: args.id });
         return { metas: result.items.map(renderPreview), cacheMaxAge: result.cacheMaxAge };
       }
       const pageArgs: { catalogId: string; type: string; genre?: string; skip: number } = {

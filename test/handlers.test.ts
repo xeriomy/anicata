@@ -47,7 +47,7 @@ const anime: Anime = {
 
 function fakeService(overrides: {
   getCatalogPage?: (args: { catalogId: string; type: string; genre?: string; skip: number }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
-  search?: (args: { term: string; skip: number }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
+  search?: (args: { term: string; skip: number; catalogId?: string }) => Promise<{ items: Anime[]; cacheMaxAge: number; freshness: 'fresh' | 'stale' }>;
 } = {}): CatalogService {
   return {
     getCatalogPage: vi.fn(async () => ({ items: [], cacheMaxAge: 60, freshness: 'fresh' as const })),
@@ -63,7 +63,19 @@ describe('createCatalogHandler', () => {
     });
     const handler = createCatalogHandler({ catalogService: service });
     const res = await handler({ type: 'anime', id: 'anime-search', extra: { search: 'one piece' } });
-    expect(service.search as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith({ term: 'one piece', skip: 0 });
+    expect(service.search as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith({ term: 'one piece', skip: 0, catalogId: 'anime-search' });
+    expect(res.metas).toHaveLength(1);
+    expect(res.metas[0]?.id).toBe('anilist:21');
+    expect(res.cacheMaxAge).toBe(1800);
+  });
+
+  it('routes movie-search with a term to catalogService.search with the movie catalogue id', async () => {
+    const service = fakeService({
+      search: vi.fn(async () => ({ items: [anime], cacheMaxAge: 1800, freshness: 'fresh' as const })),
+    });
+    const handler = createCatalogHandler({ catalogService: service });
+    const res = await handler({ type: 'movie', id: 'movie-search', extra: { search: 'one piece' } });
+    expect(service.search as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith({ term: 'one piece', skip: 0, catalogId: 'movie-search' });
     expect(res.metas).toHaveLength(1);
     expect(res.metas[0]?.id).toBe('anilist:21');
     expect(res.cacheMaxAge).toBe(1800);
@@ -89,6 +101,14 @@ describe('createCatalogHandler', () => {
     const service = fakeService();
     const handler = createCatalogHandler({ catalogService: service });
     await handler({ type: 'anime', id: 'anime-search' });
+    expect((service.getCatalogPage as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1);
+    expect((service.search as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
+  });
+
+  it('falls back to getCatalogPage for a non-search catalogue carrying a stray search term', async () => {
+    const service = fakeService();
+    const handler = createCatalogHandler({ catalogService: service });
+    await handler({ type: 'movie', id: 'movie-trending', extra: { search: 'one piece' } });
     expect((service.getCatalogPage as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(1);
     expect((service.search as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
   });

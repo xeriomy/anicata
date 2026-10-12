@@ -70,10 +70,28 @@ describe('catalogCacheKey / searchCacheKey', () => {
     expect(catalogCacheKey('anilist', 'anime-trending', undefined, 100)).not.toBe(base);
   });
 
-  it('search keys are namespaced too', () => {
-    expect(searchCacheKey('kitsu', 'bebop', 0)).not.toBe(searchCacheKey('anilist', 'bebop', 0));
-    expect(searchCacheKey('anilist', 'bebop', 0)).toBe(searchCacheKey('anilist', 'bebop', 0));
-    expect(searchCacheKey('anilist', 'bebop', 100)).not.toBe(searchCacheKey('anilist', 'bebop', 0));
+  it('search keys are namespaced by source and catalogue', () => {
+    expect(searchCacheKey('kitsu', 'anime-search', 'bebop', 0)).not.toBe(
+      searchCacheKey('anilist', 'anime-search', 'bebop', 0),
+    );
+    expect(searchCacheKey('anilist', 'anime-search', 'bebop', 0)).toBe(
+      searchCacheKey('anilist', 'anime-search', 'bebop', 0),
+    );
+    expect(searchCacheKey('anilist', 'anime-search', 'bebop', 100)).not.toBe(
+      searchCacheKey('anilist', 'anime-search', 'bebop', 0),
+    );
+  });
+
+  it('an anime search and a movie search for the same term never share a key', () => {
+    const animeKey = searchCacheKey('anilist', 'anime-search', 'bebop', 0);
+    const movieKey = searchCacheKey('anilist', 'movie-search', 'bebop', 0);
+    expect(animeKey).not.toBe(movieKey);
+    // Both keys are stable across calls.
+    expect(searchCacheKey('anilist', 'anime-search', 'bebop', 0)).toBe(animeKey);
+    expect(searchCacheKey('anilist', 'movie-search', 'bebop', 0)).toBe(movieKey);
+    // An absent catalogue keeps the exact legacy shape (empty segment).
+    expect(searchCacheKey('anilist', undefined, 'bebop', 0)).toBe('search:anilist::bebop:0');
+    expect(animeKey).not.toBe(searchCacheKey('anilist', undefined, 'bebop', 0));
   });
 });
 
@@ -163,5 +181,19 @@ describe('CatalogService over SourceChain', () => {
     const again = await svcA.search({ term: 'bebop', skip: 0 });
     expect(again.items[0]?.displayTitle).toBe('anilist Title 1');
     expect(anilistChain.search).toHaveBeenCalledTimes(1);
+  });
+
+  it('two catalogues searching the same term store two cache entries', async () => {
+    const anilistChain = fakeChain('anilist');
+    const svc = new CatalogService({ source: anilistChain as never, cache: new TTLCache() });
+    await svc.search({ term: 'bebop', skip: 0, catalogId: 'anime-search' });
+    await svc.search({ term: 'bebop', skip: 0, catalogId: 'movie-search' });
+    // A repeat round is served from the two distinct entries: no chain calls.
+    await svc.search({ term: 'bebop', skip: 0, catalogId: 'anime-search' });
+    await svc.search({ term: 'bebop', skip: 0, catalogId: 'movie-search' });
+    expect(anilistChain.search).toHaveBeenCalledTimes(2);
+    // Each call carried its own catalogue id as the trailing argument.
+    expect(anilistChain.search).toHaveBeenNthCalledWith(1, 'bebop', 0, 100, 'search:bebop', 'anime-search');
+    expect(anilistChain.search).toHaveBeenNthCalledWith(2, 'bebop', 0, 100, 'search:bebop', 'movie-search');
   });
 });

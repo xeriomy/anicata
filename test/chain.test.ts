@@ -36,22 +36,27 @@ const REQ: PageRequest = { catalogId: 'trending', skip: 0, limit: 20 };
 
 interface FakeSource extends AnimeSource {
   fetchPageMock: ReturnType<typeof vi.fn<(req: PageRequest) => Promise<SourcePage>>>;
-  searchMock: ReturnType<typeof vi.fn<(term: string, skip: number, limit: number, timeoutMs?: number) => Promise<SourcePage>>>;
+  searchMock: ReturnType<typeof vi.fn<(term: string, skip: number, limit: number, timeoutMs?: number, catalogId?: string) => Promise<SourcePage>>>;
   fetchByIdMock: ReturnType<typeof vi.fn<(id: number, timeoutMs?: number) => Promise<Anime | null>>>;
 }
 
 function fakeSource(id: SourceId): FakeSource {
   const fetchPageMock = vi.fn<(req: PageRequest) => Promise<SourcePage>>();
   const fetchByIdMock = vi.fn<(id: number, timeoutMs?: number) => Promise<Anime | null>>();
-  const searchMock = vi.fn<(term: string, skip: number, limit: number, timeoutMs?: number) => Promise<SourcePage>>();
+  const searchMock = vi.fn<(term: string, skip: number, limit: number, timeoutMs?: number, catalogId?: string) => Promise<SourcePage>>();
   return {
     id,
     fetchPage: (req: PageRequest) => fetchPageMock(req),
-    search: (term: string, skip: number, limit: number, timeoutMs?: number) => {
+    // Forwards only the arguments it was given, so a 4-arg call shape stays a
+    // 4-arg shape on the mock and `toHaveBeenCalledWith` pins keep matching.
+    search: (term: string, skip: number, limit: number, timeoutMs?: number, catalogId?: string) => {
       if (timeoutMs === undefined) {
         return searchMock(term, skip, limit);
       }
-      return searchMock(term, skip, limit, timeoutMs);
+      if (catalogId === undefined) {
+        return searchMock(term, skip, limit, timeoutMs);
+      }
+      return searchMock(term, skip, limit, timeoutMs, catalogId);
     },
     fetchById: (num: number, timeoutMs?: number) => {
       if (timeoutMs === undefined) {
@@ -424,6 +429,22 @@ describe('SourceChain.search', () => {
     // The primary is skipped outright on the second call: still one call.
     expect(primary.searchMock).toHaveBeenCalledTimes(1);
     expect(fallback.searchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('forwards the catalogue id to the source as the trailing argument', async () => {
+    const { chain, primary } = setup();
+    primary.searchMock.mockResolvedValue(page([1], 'anilist', 1));
+    await chain.search('bebop', 0, 20, 'search:bebop', 'movie-search');
+    expect(primary.searchMock).toHaveBeenCalledWith('bebop', 0, 20, 4000, 'movie-search');
+  });
+
+  it('omits the catalogue argument entirely (no trailing undefined) when none is given', async () => {
+    const { chain, primary } = setup();
+    primary.searchMock.mockResolvedValue(page([1], 'anilist', 1));
+    await chain.search('bebop', 0, 20, 'search:bebop');
+    // The pinned 4-arg shape: an explicit undefined here would break the mock.
+    expect(primary.searchMock).toHaveBeenCalledWith('bebop', 0, 20, 4000);
+    expect(primary.searchMock.mock.calls[0]).toHaveLength(4);
   });
 });
 

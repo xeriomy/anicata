@@ -309,7 +309,16 @@ export class KitsuSource implements AnimeSource {
     return { items: collected.slice(0, req.limit), total };
   }
 
-  async search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage> {
+  async search(
+    term: string,
+    skip: number,
+    limit: number,
+    timeoutMs?: number,
+    catalogId?: string,
+  ): Promise<SourcePage> {
+    // Kitsu gains no format filter for a catalogue-specific search: a
+    // deliberate Phase 5 §6 parity gap (non-goal), so the id is ignored.
+    void catalogId;
     // Same stitching as fetchPage: filter[text] search is subject to the same
     // page[limit] cap, so large limits are sequential <=cap calls with the
     // same budget-aware stop.

@@ -27,7 +27,7 @@ export interface SourcePage {
 export interface AnimeSource {
   readonly id: SourceId;
   fetchPage(req: PageRequest): Promise<SourcePage>;
-  search(term: string, skip: number, limit: number, timeoutMs?: number): Promise<SourcePage>;
+  search(term: string, skip: number, limit: number, timeoutMs?: number, catalogId?: string): Promise<SourcePage>;
   /**
    * Numeric, not string: both id namespaces are integers (AniList `21`, Kitsu
    * `1376`), and `AniListSource.fetchById` already takes a number. The namespace

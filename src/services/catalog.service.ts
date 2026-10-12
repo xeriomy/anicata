@@ -31,8 +31,16 @@ export function catalogCacheKey(
   return `catalog:${sourceId}:${catalogId}:${genre ?? ''}:${skip}`;
 }
 
-export function searchCacheKey(sourceId: SourceId, term: string, skip: number): string {
-  return `search:${sourceId}:${term}:${skip}`;
+export function searchCacheKey(
+  sourceId: SourceId,
+  catalogId: string | undefined,
+  term: string,
+  skip: number,
+): string {
+  // The catalogue travels with the term: an anime-search hit and a
+  // movie-search hit for the same term must not share one entry. An absent
+  // catalogue keeps the legacy empty-segment shape.
+  return `search:${sourceId}:${catalogId ?? ''}:${term}:${skip}`;
 }
 
 /**
@@ -63,8 +71,8 @@ function catalogRendezvous(catalogId: string, genre: string | undefined, skip: n
   return `catalog-req:${catalogId}:${genre ?? ''}:${skip}`;
 }
 
-function searchRendezvous(term: string, skip: number): string {
-  return `search-req:${term}:${skip}`;
+function searchRendezvous(catalogId: string | undefined, term: string, skip: number): string {
+  return `search-req:${catalogId ?? ''}:${term}:${skip}`;
 }
 
 export class CatalogService {
@@ -132,7 +140,11 @@ export class CatalogService {
     }
   }
 
-  async search(args: { term: string; skip: number }): Promise<CatalogPageResult> {
+  async search(args: {
+    term: string;
+    skip: number;
+    catalogId?: string;
+  }): Promise<CatalogPageResult> {
     try {
       const trimmed = args.term.trim();
       if (trimmed === '') {
@@ -140,20 +152,23 @@ export class CatalogService {
       }
       const term = trimmed.slice(0, 200);
       const skip = coerceSkip(args.skip);
+      const catalogId = args.catalogId;
+      // Deliberately term-only (unlike the cache key): the SOURCE that served
+      // may be shared across catalogues — only the cached RESULTS must not be.
       const stickyKey = `search:${term}`;
       const predicted = this.source.peekSticky(stickyKey);
       if (predicted !== undefined) {
-        const hit = this.cache.get<CachedPage>(searchCacheKey(predicted, term, skip));
+        const hit = this.cache.get<CachedPage>(searchCacheKey(predicted, catalogId, term, skip));
         if (hit !== undefined) {
           if (hit.freshness === 'fresh') {
             return this.toSearchResult(hit.value, 'fresh');
           }
-          this.refreshSearch(stickyKey, term, skip);
+          this.refreshSearch(stickyKey, catalogId, term, skip);
           return this.toSearchResult(hit.value, 'stale');
         }
       }
-      const value = await this.cache.dedupe(searchRendezvous(term, skip), () =>
-        this.fetchAndStoreSearch(stickyKey, term, skip),
+      const value = await this.cache.dedupe(searchRendezvous(catalogId, term, skip), () =>
+        this.fetchAndStoreSearch(stickyKey, catalogId, term, skip),
       );
       return this.toSearchResult(value, 'fresh');
     } catch (err) {
@@ -204,12 +219,21 @@ export class CatalogService {
 
   private async fetchAndStoreSearch(
     stickyKey: string,
+    catalogId: string | undefined,
     term: string,
     skip: number,
   ): Promise<CachedPage> {
-    const res = await this.source.search(term, skip, PAGE_SIZE, stickyKey);
+    // The catalogue id is appended only when present: passing an explicit
+    // undefined would break call sites pinning the legacy 4-arg chain shape.
+    const res = await this.source.search(
+      term,
+      skip,
+      PAGE_SIZE,
+      stickyKey,
+      ...(catalogId !== undefined ? [catalogId] : []),
+    );
     const value: CachedPage = { items: res.items, total: res.total, sourceId: res.sourceId };
-    this.cache.set<CachedPage>(searchCacheKey(res.sourceId, term, skip), value, {
+    this.cache.set<CachedPage>(searchCacheKey(res.sourceId, catalogId, term, skip), value, {
       ttlMs: SEARCH_TTL_MS,
       staleMs: CATALOG_STALE_MS,
     });
@@ -237,9 +261,16 @@ export class CatalogService {
       .catch(() => undefined);
   }
 
-  private refreshSearch(stickyKey: string, term: string, skip: number): void {
+  private refreshSearch(
+    stickyKey: string,
+    catalogId: string | undefined,
+    term: string,
+    skip: number,
+  ): void {
     void this.cache
-      .dedupe(searchRendezvous(term, skip), () => this.fetchAndStoreSearch(stickyKey, term, skip))
+      .dedupe(searchRendezvous(catalogId, term, skip), () =>
+        this.fetchAndStoreSearch(stickyKey, catalogId, term, skip),
+      )
       .catch(() => undefined);
   }
 }

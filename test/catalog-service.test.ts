@@ -144,6 +144,21 @@ describe('CatalogService.search', () => {
     expect(source.search).toHaveBeenCalledWith('cowboy bebop', 0, PAGE_SIZE, 'search:cowboy bebop');
   });
 
+  it('passes the catalogue id to the chain as the trailing argument; the sticky key stays term-only', async () => {
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn().mockResolvedValue(pg(mk(3), 3)) };
+    const { s } = svc(source);
+    await s.search({ term: 'cowboy bebop', skip: 0, catalogId: 'movie-search' });
+    expect(source.search).toHaveBeenCalledWith('cowboy bebop', 0, PAGE_SIZE, 'search:cowboy bebop', 'movie-search');
+  });
+
+  it('omits the catalogue argument for a term-only search, keeping the legacy 4-arg call', async () => {
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn().mockResolvedValue(pg(mk(3), 3)) };
+    const { s } = svc(source);
+    await s.search({ term: 'cowboy bebop', skip: 0 });
+    expect(source.search).toHaveBeenCalledWith('cowboy bebop', 0, PAGE_SIZE, 'search:cowboy bebop');
+    expect(source.search.mock.calls[0]).toHaveLength(4);
+  });
+
   it('returns empty without calling the source for a blank term', async () => {
     const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn() };
     const { s } = svc(source);
