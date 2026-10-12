@@ -1,5 +1,4 @@
-import { CATALOG_DEFS, PAGE_SIZE } from '../sources/catalog-def.js';
-import type { CatalogDefinition } from '../sources/catalog-def.js';
+import { PAGE_SIZE, catalogDefFor } from '../sources/catalog-def.js';
 import type { PageRequest, SourceId } from '../sources/types.js';
 import type { SourceChain } from '../sources/chain.js';
 import type { Anime } from '../domain/anime.js';
@@ -93,19 +92,22 @@ export class CatalogService {
     skip: number;
   }): Promise<CatalogPageResult> {
     try {
-      const def = (CATALOG_DEFS as Record<string, CatalogDefinition | undefined>)[args.catalogId];
+      const def = catalogDefFor(args.catalogId);
       if (def === undefined || def.type !== args.type) {
         return { items: [], cacheMaxAge: 60, freshness: 'fresh' };
       }
       const skip = coerceSkip(args.skip);
-      const genre = args.genre;
+      // The manifest declares the genre picker per catalogue, so a genre on a
+      // catalogue that never offered one is off-contract client behaviour: drop it
+      // rather than silently narrowing a row that advertised no filter.
+      const effectiveGenre = def.supportsGenre === true ? args.genre : undefined;
       // The caller owns its stickiness scope: one entry per catalogue+genre so
       // a mid-scroll fallback sticks for the rest of the scroll. Always passed
       // explicitly — an omitted key would silently disable stickiness.
-      const stickyKey = `${args.catalogId}:${genre ?? ''}`;
+      const stickyKey = `${args.catalogId}:${effectiveGenre ?? ''}`;
       const req: PageRequest = { catalogId: args.catalogId, skip, limit: PAGE_SIZE };
-      if (genre !== undefined) {
-        req.genre = genre;
+      if (effectiveGenre !== undefined) {
+        req.genre = effectiveGenre;
       }
       // The serving source is only known after the fetch, so consult the cache
       // under the sticky-predicted source; on a cold key (or a misprediction)
@@ -120,18 +122,18 @@ export class CatalogService {
       // warm cache implies a stale serve on this path.
       const predicted = this.source.peekSticky(stickyKey);
       if (predicted !== undefined) {
-        const hit = this.cache.get<CachedPage>(catalogCacheKey(predicted, args.catalogId, genre, skip));
+        const hit = this.cache.get<CachedPage>(catalogCacheKey(predicted, args.catalogId, effectiveGenre, skip));
         if (hit !== undefined) {
           if (hit.freshness === 'fresh') {
             return this.toResult(hit.value, 'fresh');
           }
-          this.refreshCatalog(stickyKey, args.catalogId, req, genre, skip);
+          this.refreshCatalog(stickyKey, args.catalogId, req, effectiveGenre, skip);
           return this.toResult(hit.value, 'stale');
         }
       }
       const value = await this.cache.dedupe(
-        catalogRendezvous(args.catalogId, genre, skip),
-        () => this.fetchAndStoreCatalog(stickyKey, args.catalogId, req, genre, skip),
+        catalogRendezvous(args.catalogId, effectiveGenre, skip),
+        () => this.fetchAndStoreCatalog(stickyKey, args.catalogId, req, effectiveGenre, skip),
       );
       return this.toResult(value, 'fresh');
     } catch (err) {

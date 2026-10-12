@@ -1,7 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { CatalogService } from '../src/services/catalog.service.js';
 import { TTLCache } from '../src/cache/store.js';
-import { PAGE_SIZE } from '../src/sources/catalog-def.js';
+import { PAGE_SIZE, seasonalCatalogId } from '../src/sources/catalog-def.js';
 import type { Anime } from '../src/domain/anime.js';
 
 const ids = (items: Anime[]) => items.map(i => i.identity.anilist);
@@ -83,12 +83,24 @@ describe('CatalogService.getCatalogPage', () => {
   });
 
   it('keys the cache by genre as well as catalog and skip', async () => {
+    // `anime-genres` is the catalogue that declares the genre picker; a genre
+    // on any other catalogue is dropped before it can reach a cache key.
     const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(50), 5000)), search: vi.fn() };
     const { s } = svc(source);
-    await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0 });
-    await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0, genre: 'Action' });
+    await s.getCatalogPage({ catalogId: 'anime-genres', type: 'anime', skip: 0 });
+    await s.getCatalogPage({ catalogId: 'anime-genres', type: 'anime', skip: 0, genre: 'Action' });
     expect(source.fetchPage).toHaveBeenCalledTimes(2);
-    expect(source.fetchPage).toHaveBeenLastCalledWith('anime-trending', { catalogId: 'anime-trending', skip: 0, limit: PAGE_SIZE, genre: 'Action' }, 'anime-trending:Action');
+    expect(source.fetchPage).toHaveBeenLastCalledWith('anime-genres', { catalogId: 'anime-genres', skip: 0, limit: PAGE_SIZE, genre: 'Action' }, 'anime-genres:Action');
+  });
+
+  it('drops a genre on a catalogue with no genre picker instead of narrowing the row', async () => {
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(50), 5000)), search: vi.fn() };
+    const { s } = svc(source);
+    const r = await s.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0, genre: 'Action' });
+    expect(r.items).toHaveLength(50);
+    expect(source.fetchPage).toHaveBeenCalledTimes(1);
+    // No `genre` in the forwarded request and the sticky key stays genre-less.
+    expect(source.fetchPage).toHaveBeenCalledWith('anime-trending', { catalogId: 'anime-trending', skip: 0, limit: PAGE_SIZE }, 'anime-trending:');
   });
 
   it('rejects an unknown catalog id without touching the source', async () => {
@@ -103,6 +115,39 @@ describe('CatalogService.getCatalogPage', () => {
     const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn() };
     const { s } = svc(source);
     expect((await s.getCatalogPage({ catalogId: 'anime-trending', type: 'movie', skip: 0 })).items).toEqual([]);
+    expect(source.fetchPage).not.toHaveBeenCalled();
+  });
+
+  it('serves the current generated seasonal id with one source call', async () => {
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(50), 5000)), search: vi.fn() };
+    const { s } = svc(source);
+    const catalogId = seasonalCatalogId(new Date());
+    const r = await s.getCatalogPage({ catalogId, type: 'anime', skip: 0 });
+    expect(r.items).toHaveLength(50);
+    expect(source.fetchPage).toHaveBeenCalledTimes(1);
+    expect(source.fetchPage).toHaveBeenCalledWith(catalogId, { catalogId, skip: 0, limit: PAGE_SIZE }, `${catalogId}:`);
+  });
+
+  it('serves a non-current seasonal pair without a clock rejection', async () => {
+    // The registry parses the shape, never the clock: `anime-seasonal-2027-winter`
+    // requested in 2026 is a legal row whose season travels in its id.
+    const source = { peekSticky: sticky(), fetchPage: vi.fn().mockResolvedValue(pg(mk(20), 20)), search: vi.fn() };
+    const { s } = svc(source);
+    const r = await s.getCatalogPage({ catalogId: 'anime-seasonal-2027-winter', type: 'anime', skip: 0 });
+    expect(r.items).toHaveLength(20);
+    expect(source.fetchPage).toHaveBeenCalledTimes(1);
+    expect(source.fetchPage).toHaveBeenCalledWith(
+      'anime-seasonal-2027-winter',
+      { catalogId: 'anime-seasonal-2027-winter', skip: 0, limit: PAGE_SIZE },
+      'anime-seasonal-2027-winter:',
+    );
+  });
+
+  it('rejects malformed seasonal ids without touching the source', async () => {
+    const source = { peekSticky: sticky(), fetchPage: vi.fn(), search: vi.fn() };
+    const { s } = svc(source);
+    expect((await s.getCatalogPage({ catalogId: 'anime-seasonal-2026-monsoon', type: 'anime', skip: 0 })).items).toEqual([]);
+    expect((await s.getCatalogPage({ catalogId: 'anime-seasonal-2026', type: 'anime', skip: 0 })).items).toEqual([]);
     expect(source.fetchPage).not.toHaveBeenCalled();
   });
 

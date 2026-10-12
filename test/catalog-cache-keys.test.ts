@@ -158,13 +158,15 @@ describe('CatalogService over SourceChain', () => {
   });
 
   it('passes genre through to the chain request', async () => {
+    // `anime-genres` is the catalogue that declares the genre picker; a genre
+    // on any other catalogue is dropped before it can reach the chain.
     const anilistChain = fakeChain('anilist');
     const svc = new CatalogService({ source: anilistChain as never, cache: new TTLCache() });
-    await svc.getCatalogPage({ catalogId: 'anime-trending', type: 'anime', skip: 0, genre: 'Action' });
+    await svc.getCatalogPage({ catalogId: 'anime-genres', type: 'anime', skip: 0, genre: 'Action' });
     expect(anilistChain.fetchPage).toHaveBeenCalledWith(
-      'anime-trending',
-      { catalogId: 'anime-trending', skip: 0, limit: 100, genre: 'Action' },
-      'anime-trending:Action',
+      'anime-genres',
+      { catalogId: 'anime-genres', skip: 0, limit: 100, genre: 'Action' },
+      'anime-genres:Action',
     );
   });
 
