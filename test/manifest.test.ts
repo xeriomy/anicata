@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { seasonalCatalogId } from '../src/sources/catalog-def.js';
+import { GENRE_OPTIONS, seasonalCatalogId } from '../src/sources/catalog-def.js';
 import { addonBuilder, type Manifest } from 'stremio-addon-sdk';
 import { buildManifest, assertManifestFits, ADDON_ID, ADDON_NAME } from '../src/addon/manifest.js';
 
@@ -95,6 +95,38 @@ describe('buildManifest', () => {
       const e = (c.extra ?? []).find((x) => x.name === 'search');
       expect(e?.isRequired, c.id).not.toBe(true);
     }
+  });
+
+  it('declares the genre picker with the 18 options, on exactly the two genre catalogues', () => {
+    // Declaring `options` is what makes Nuvio render a picker instead of a
+    // free-text field. Without it a user-typed genre reaches AniList's
+    // exact-match filter, and a miss there is a silent empty page, not an
+    // error — so the option list is pinned here.
+    const withGenre = m.catalogs!.filter((c) => (c.extra ?? []).some((e) => e.name === 'genre'));
+    expect(withGenre.map((c) => c.id).sort()).toEqual(['anime-genres', 'anime-top-genres']);
+    // 19 known AniList genres minus Hentai is exactly the 18 the roadmap
+    // specifies; the spellings ('Sci-Fi', 'Slice of Life', 'Mahou Shoujo')
+    // are AniList's, captured in test/fixtures/anilist-genres.json.
+    expect(GENRE_OPTIONS.length).toBe(18);
+
+    for (const c of withGenre) {
+      const genre = c.extra!.find((e) => e.name === 'genre');
+      expect(genre?.options, c.id).toEqual([...GENRE_OPTIONS]);
+    }
+
+    // Every other catalogue — fixed or seasonal — carries no genre extra, so
+    // the picker never appears where the service would not apply the filter.
+    for (const c of m.catalogs!) {
+      if (withGenre.includes(c)) continue;
+      expect((c.extra ?? []).some((e) => e.name === 'genre'), c.id).toBe(false);
+    }
+  });
+
+  it('keeps the seasonal catalogue on Home: skip present, nothing required', () => {
+    const seasonal = m.catalogs!.find((c) => c.id === seasonalCatalogId(new Date()));
+    expect(seasonal).toBeDefined();
+    expect(seasonal!.extra!.some((e) => e.name === 'skip')).toBe(true);
+    expect(seasonal!.extra!.every((e) => e.isRequired !== true)).toBe(true);
   });
 
   it('points logo at a path our own server serves', () => {

@@ -206,13 +206,13 @@ disk cache, deployment config.
 
 ### Exit gate
 
-- [ ] All 15 catalogs appear on Nuvio Home (verifies no `isRequired` extras)
-- [ ] All paginate with no overlap at every `skip`
-- [ ] Genre filter populated with 18 options and filters correctly
-- [ ] Discover works with **and** without a genre selected
-- [ ] Manifest still ≤ 8192 B (asserted in CI)
-- [ ] Seasonal catalog rolls over correctly across a season boundary
-- [ ] Request count per 1,000 catalogue page views stays within budget
+- [ ] All 15 catalogs appear on Nuvio Home (verifies no `isRequired` extras) — **DEFERRED to Phase 7:** needs a real Nuvio install; the offline half (no `isRequired` extras except search) is pinned in `test/manifest.test.ts`.
+- [ ] All paginate with no overlap at every `skip` — ✅ **provable in CI:** no-overlap at every `skip` pinned by the catalogue-service and adapter pagination tests.
+- [ ] Genre filter populated with 18 options and filters correctly — ✅ **provable in CI:** the 18 options are pinned to AniList's captured GenreCollection (`GENRE_OPTIONS` + manifest picker test); **live opt-in:** filters apply upstream (`test/live/phase5-filters.live.test.ts`).
+- [ ] Discover works with **and** without a genre selected — **DEFERRED to Phase 7:** the Discover-with/without-genre UX check needs a real Nuvio install.
+- [ ] Manifest still ≤ 8192 B (asserted in CI) — ✅ **provable in CI:** asserted in `assertManifestFits` and the manifest suite; green in all four offline gate modes.
+- [ ] Seasonal catalog rolls over correctly across a season boundary — **HALF DONE:** id carries the season+year pair and the service resolves any valid pair; rollover-on-manifest-fetch remains the documented limit (design §5).
+- [ ] Request count per 1,000 catalogue page views stays within budget — **DEFERRED to Phase 7:** the per-1,000-view measurement needs a live Nuvio install.
 
 ---
 
