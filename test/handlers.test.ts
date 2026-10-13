@@ -167,11 +167,12 @@ function fakeMetaService(overrides?: {
 }
 
 describe('createMetaHandler', () => {
-  it('returns Unavailable with cacheMaxAge 60 and zero service calls for an unparseable id', async () => {
+  it('returns an UNNAMED placeholder (Nuvio falls through) for an unparseable id', async () => {
     const service = fakeMetaService();
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: '21' });
-    expect(res.meta).toMatchObject({ id: '21', type: 'anime', name: 'Unavailable' });
+    expect(res.meta).toMatchObject({ id: '21', type: 'anime' });
+    expect(res.meta.name).toBeUndefined();
     expect(res.cacheMaxAge).toBe(60);
     expect((service.getById as unknown as { mock: { calls: unknown[][] } }).mock.calls).toHaveLength(0);
   });
@@ -204,14 +205,15 @@ describe('createMetaHandler', () => {
     expect(res.cacheMaxAge).toBe(604800);
   });
 
-  it('returns Unavailable with cacheMaxAge 60 when the anime is unknown', async () => {
+  it('returns an UNNAMED placeholder when the anime is unknown', async () => {
     const service = fakeMetaService({
       getById: vi.fn(async () => ({ anime: null, cacheMaxAge: 60, freshness: 'fresh' as const })),
     });
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: 'anilist:999999' });
     expect(service.getById as unknown as { mock: { calls: unknown[][] } }).toHaveBeenCalledWith('anilist:999999');
-    expect(res.meta).toMatchObject({ id: 'anilist:999999', type: 'anime', name: 'Unavailable' });
+    expect(res.meta).toMatchObject({ id: 'anilist:999999', type: 'anime' });
+    expect(res.meta.name).toBeUndefined();
     expect(res.cacheMaxAge).toBe(60);
   });
 
@@ -226,13 +228,14 @@ describe('createMetaHandler', () => {
     expect(res.cacheMaxAge).toBe(604800);
   });
 
-  it('never throws: returns Unavailable with cacheMaxAge 10 when the service fails', async () => {
+  it('never throws: unnamed placeholder with cacheMaxAge 10 when the service fails', async () => {
     const service = fakeMetaService({
       getById: vi.fn(async () => { throw new Error('upstream down'); }),
     });
     const handler = createMetaHandler({ metaService: service });
     const res = await handler({ type: 'anime', id: 'anilist:21' });
-    expect(res.meta).toMatchObject({ id: 'anilist:21', type: 'anime', name: 'Unavailable' });
+    expect(res.meta).toMatchObject({ id: 'anilist:21', type: 'anime' });
+    expect(res.meta.name).toBeUndefined();
     expect(res.cacheMaxAge).toBe(10);
   });
 });

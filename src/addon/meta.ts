@@ -43,18 +43,25 @@ export function parseMetaId(raw: string): ParsedMetaId | null {
  * (usually `'anime'`, outside the SDK's union). The single `as` carries it;
  * no `any` involved.
  */
-type MinimalOut = Omit<StremioMetaDetail, 'type'> & { type: string };
+// `name` is deliberately dropped from the widened shape: the placeholder must
+// NOT satisfy a parser that requires a name, or Nuvio accepts it as a result.
+type MinimalOut = Omit<StremioMetaDetail, 'type' | 'name'> & { type: string };
 
 /**
  * Nuvio's `MetaDetailsParser` requires `id`, `type` and `name` — a missing
- * one makes it throw and Nuvio skips the add-on entirely. Every failure path
- * returns this shape so a failure is always a clean "no results".
+ * one makes it throw, and a throw inside `tryFetchMeta` yields null, which
+ * makes Nuvio fall through to the NEXT add-on.
+ *
+ * That asymmetry is the whole design: a title we cannot serve must NOT look
+ * like a valid result. The placeholder therefore carries id and type but
+ * deliberately OMITS `name` — Nuvio rejects it and asks the next add-on,
+ * instead of rendering a dead "Unavailable" page for a title another add-on
+ * could have served. Still a 200 (the never-5xx invariant holds).
  */
-function minimalMeta(args: MetaArgs): StremioMetaDetail {
+export function minimalMeta(args: MetaArgs): StremioMetaDetail {
   const full: MinimalOut = {
     id: args.id,
     type: args.type,
-    name: 'Unavailable',
   };
   return full as StremioMetaDetail;
 }

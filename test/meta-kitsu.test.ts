@@ -90,27 +90,29 @@ describe('kitsu: meta resolution', () => {
     const { handler, kitsuFetchById } = setup();
     const res = await handler({ type: 'anime', id: 'kitsu:999999' });
     expect(kitsuFetchById).toHaveBeenCalledWith(999999, expect.any(Number));
-    // Complete meta object, never a throw: id/type/name all non-blank.
+    // Never a throw: id and type are non-blank; `name` is deliberately absent
+    // so Nuvio's parser rejects the placeholder and falls through to the next
+    // add-on instead of rendering a dead "Unavailable" page.
     expect(res.meta.id.trim()).not.toBe('');
     expect(res.meta.type.trim()).not.toBe('');
-    expect(res.meta.name.trim()).not.toBe('');
-    expect(res.meta.name).toBe('Unavailable');
+    expect(res.meta.name).toBeUndefined();
   });
 
-  it('the Unavailable shape still carries non-blank id, type and name for both namespaces', async () => {
+  it('the placeholder still carries non-blank id and type for both namespaces (name omitted so Nuvio falls through)', async () => {
     const { handler } = setup();
     for (const id of ['anilist:999999', 'kitsu:999999']) {
       const res = await handler({ type: 'anime', id });
       expect(res.meta.id.trim(), id).not.toBe('');
       expect(res.meta.type.trim(), id).not.toBe('');
-      expect(res.meta.name.trim(), id).not.toBe('');
+      expect(res.meta.name, id).toBeUndefined();
     }
   });
 
   it('a bare numeric id is still rejected without touching either source', async () => {
     const { handler, anilistFetchById, kitsuFetchById } = setup();
     const res = await handler({ type: 'anime', id: '21' });
-    expect(res.meta).toMatchObject({ id: '21', type: 'anime', name: 'Unavailable' });
+    expect(res.meta).toMatchObject({ id: '21', type: 'anime' });
+    expect(res.meta.name).toBeUndefined();
     expect(anilistFetchById).toHaveBeenCalledTimes(0);
     expect(kitsuFetchById).toHaveBeenCalledTimes(0);
   });

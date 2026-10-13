@@ -152,17 +152,17 @@ describe('GET /meta/:type/:id.json', () => {
     expect(res.body.meta.audioLanguage).toBe(res.body.meta.language);
   });
 
-  it('returns a 200 with id, type and name for an unknown id', async () => {
+  it('returns a 200 with id and type but no name for an unknown id (falls through in Nuvio)', async () => {
     const res = await supertest(app).get('/meta/anime/anilist%3A99999999.json');
     expect(res.status).toBe(200);
     expect(res.body.meta.id).toBe('anilist:99999999');
-    expect(res.body.meta.name).toBe('Unavailable');
+    expect(res.body.meta.name).toBeUndefined();
   });
 
   it('returns a 200 for a bare numeric id rather than erroring', async () => {
     const res = await supertest(app).get('/meta/anime/21.json');
     expect(res.status).toBe(200);
-    expect(res.body.meta.name).toBe('Unavailable');
+    expect(res.body.meta.name).toBeUndefined();
   });
 
   it('emits links with name, category and url', async () => {
@@ -209,7 +209,7 @@ describe('never returns a non-200', () => {
       const res = await supertest(broken).get(path);
       expect(res.status, path).toBe(200);
       expect(res.body.meta.id, path).toBeTruthy();
-      expect(res.body.meta.name, path).toBe('Unavailable');
+      expect(res.body.meta.name, path).toBeUndefined();
     }
   });
 });
@@ -298,7 +298,7 @@ describe('fallback chain wiring (Phase 2)', () => {
     // The anilist:-namespaced id routes to the throwing primary, which has no
     // cross-namespace fallback: a clean Unavailable placeholder, still 200.
     const dead = await supertest(app).get('/meta/anime/anilist%3A21.json');
-    expect(dead.body.meta.name).toBe('Unavailable');
+    expect(dead.body.meta.name).toBeUndefined();
   });
 
   it('a hanging primary still answers inside the chain budget via the deadline', async () => {
@@ -361,7 +361,7 @@ describe('fallback chain wiring (Phase 2)', () => {
     const meta = await supertest(hungApp).get('/meta/anime/anilist%3A21.json');
     const metaMs = Date.now() - t2;
     expect(meta.status).toBe(200);
-    expect(meta.body.meta.name).toBe('Unavailable');
+    expect(meta.body.meta.name).toBeUndefined();
     expect(metaMs).toBeLessThan(limitMs);
   });
 });

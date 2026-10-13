@@ -38,7 +38,7 @@ describe('meta handler — identity wiring (gates 4, 5)', () => {
     // Exactly one fetch, under the parsed id — no cascade, no second attempt.
     expect(getById).toHaveBeenCalledTimes(1);
     expect(getById).toHaveBeenCalledWith('anilist:99999999');
-    expect(out.meta.name).toBe('Unavailable');
+    expect(out.meta.name).toBeUndefined();
   });
 
   it('a bare number is a Trakt id: minimal meta, zero upstream calls', async () => {
@@ -52,7 +52,7 @@ describe('meta handler — identity wiring (gates 4, 5)', () => {
     const out = await handler({ type: 'anime', id: '21' });
 
     expect(out.meta.id).toBe('21');
-    expect(out.meta.name).toBe('Unavailable');
+    expect(out.meta.name).toBeUndefined();
     // Gate 5: the parse rejects it before any resolution or fetch.
     expect(resolve.resolveToCanonical).not.toHaveBeenCalled();
     expect(getById).not.toHaveBeenCalled();
