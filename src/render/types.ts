@@ -21,6 +21,14 @@ export interface StremioMetaPreview extends MetaPreview {
  * `countryOfOrigin`/`audioLanguage` are emitted alongside them.
  */
 export interface StremioMetaDetail extends Omit<MetaDetail, 'videos'> {
+  /**
+   * Snake_case on purpose: it is the field Nuvio's MetaDetailsParser reads
+   * (`imdbId = meta.string("imdb_id")`) and the fallback it uses to resolve a
+   * TMDB id when the meta id is not `tmdb:`/`tt`-shaped — which ours never are.
+   * Without it, Nuvio's TMDB enrichment, MDBList ratings and TMDB episode
+   * stills silently do nothing for our titles.
+   */
+  imdb_id?: string;
   banner?: string;
   country?: string;
   countryOfOrigin?: string;

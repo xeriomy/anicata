@@ -80,3 +80,25 @@ describe('renderDetail links[]', () => {
     ]);
   });
 });
+
+describe('renderDetail — imdb_id (Nuvio enrichment hook)', () => {
+  it('emits imdb_id so Nuvio can resolve TMDB/MDBList enrichment', () => {
+    // Nuvio parses `imdb_id` (snake_case) from the meta and uses it as the
+    // fallback when the meta id is not a tmdb/tt id. Our ids are `anilist:` /
+    // `kitsu:` prefixed, so without this field Nuvio cannot resolve a TMDB id
+    // at all: TMDB enrichment, MDBList ratings and episode stills all silently
+    // do nothing for our titles while working for addons that emit it.
+    const meta = renderDetail(mk({ anilist: 21, mal: 21, imdb: 'tt0388629' }));
+    expect(meta.imdb_id).toBe('tt0388629');
+  });
+
+  it('omits imdb_id rather than sending an empty one when the title has none', () => {
+    const meta = renderDetail(mk({ anilist: 99999999 }));
+    expect('imdb_id' in meta).toBe(false);
+  });
+
+  it('never emits imdb_id for a Kitsu-only title that has none', () => {
+    const meta = renderDetail(mk({ kitsu: 11392 }));
+    expect('imdb_id' in meta).toBe(false);
+  });
+});

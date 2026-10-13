@@ -42,6 +42,10 @@ export function renderDetail(a: Anime, videos?: StremioMetaVideo[]): StremioMeta
     hashtags: a.hashtags,
     awards: undefined,
     links: buildLinks(a.identity),
+    // Nuvio's enrichment hook (see StremioMetaDetail.imdb_id). `imdb` only
+    // exists on the anilist-carrying branch of the union; the Kitsu-only branch
+    // cannot carry one, so `in` is the narrowing that respects the union.
+    ...('imdb' in a.identity && a.identity.imdb !== undefined ? { imdb_id: a.identity.imdb } : {}),
     // Phase 4 episodes. Omitted when the tier produced nothing, so a title
     // whose episode data could not be had does not claim to have no episodes.
     ...(videos !== undefined && videos.length > 0 ? { videos } : {}),
